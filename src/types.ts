@@ -1,4 +1,4 @@
-import type { BuildingSpec, ItemId, RegionId, ResourceId } from "./gameData";
+import type { BuildingSpec, ItemId, ProductId, RegionId, ResourceId } from "./gameData";
 
 export type PlacedBuilding = {
   id: string;
@@ -23,7 +23,7 @@ export type Merchant = {
 
 export type GameStats = {
   trades: number;
-  gifts: number;
+  productTrades: number;
   crafts: number;
 };
 
@@ -37,9 +37,9 @@ export type GameState = {
   builtStage: number;
   buildings: PlacedBuilding[];
   hasDog: boolean;
-  hasChicken: boolean;
   stats: GameStats;
   success: boolean;
+  isVisit?: boolean;
 };
 
 export type BuildZoneRect = {
@@ -65,6 +65,7 @@ export type SceneCommand =
   | { type: "cancelPlacement" }
   | { type: "merchantEnter"; merchantId: string; x: number; y: number }
   | { type: "merchantTravel"; merchantId: string; target: RegionId }
+  | { type: "productWagonTravel"; target: RegionId }
   | { type: "floatText"; text: string; x?: number; y?: number };
 
 export type SceneEvent =
@@ -72,6 +73,7 @@ export type SceneEvent =
   | { type: "selectBuilding"; buildingId: string }
   | { type: "selectMainBuilding" }
   | { type: "merchantReturned"; merchantId: string }
+  | { type: "productWagonReturned"; target: RegionId; product: ProductId }
   | { type: "editPoint"; x: number; y: number }
   | { type: "moveBuildZoneRect"; zoneIndex: number; rect: BuildZoneRect }
   | { type: "notice"; message: string };

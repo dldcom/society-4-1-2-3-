@@ -24,7 +24,7 @@ const RESOURCE_SPOTS: Record<RegionId, Array<[number, number]>> = {
     [1350, 720],
     [990, 860],
   ],
-  factory: [
+  mine: [
     [1040, 660],
     [1270, 590],
     [1420, 790],
@@ -50,7 +50,7 @@ export class VillageScene extends Phaser.Scene {
   private labels = new Map<string, Phaser.GameObjects.Text>();
   private workers: Phaser.GameObjects.Sprite[] = [];
   private merchants = new Map<string, Phaser.GameObjects.Sprite>();
-  private animals: Phaser.GameObjects.Text[] = [];
+  private animals: Phaser.GameObjects.Sprite[] = [];
   private placement?: BuildingSpec;
   private preview?: Phaser.GameObjects.Image;
   private initialRegion: RegionId;
@@ -90,6 +90,14 @@ export class VillageScene extends Phaser.Scene {
     this.load.spritesheet("merchant-cart", "/assets/merchants/merchant-cart-walk-4x4.webp", {
       frameWidth: 96,
       frameHeight: 96,
+    });
+    this.load.spritesheet("product-wagon", "/assets/merchants/product-wagon-merchant-walk-4x4.webp", {
+      frameWidth: 96,
+      frameHeight: 96,
+    });
+    this.load.spritesheet("farm-dog", "/assets/animals/farm-dog-walk-4x4.webp", {
+      frameWidth: 64,
+      frameHeight: 64,
     });
   }
 
@@ -161,6 +169,10 @@ export class VillageScene extends Phaser.Scene {
       this.animateMerchant(command.merchantId, command.target);
       return;
     }
+    if (command.type === "productWagonTravel") {
+      this.animateProductWagon(command.target);
+      return;
+    }
     if (command.type === "floatText") {
       this.floatText(command.text, command.x ?? WORLD_W / 2, command.y ?? WORLD_H / 2);
     }
@@ -195,7 +207,12 @@ export class VillageScene extends Phaser.Scene {
           .setInteractive({ useHandCursor: true })
           .setDepth(20 + building.y / 10);
         sprite.on("pointerup", (_pointer: Phaser.Input.Pointer) => {
-          if (!this.pointerMoved) this.emitToReact({ type: "selectBuilding", buildingId: building.id });
+          if (this.pointerMoved) return;
+          if (this.state?.isVisit) {
+            this.emitToReact({ type: "notice", message: "구경 중에는 건물을 조작할 수 없어요." });
+            return;
+          }
+          this.emitToReact({ type: "selectBuilding", buildingId: building.id });
         });
         this.buildings.set(building.id, sprite);
         const label = this.add
@@ -232,16 +249,19 @@ export class VillageScene extends Phaser.Scene {
         WORKER_SPEED,
         (from, to) => {
           const direction = this.directionFromDelta(to[0] - from[0], to[1] - from[1]);
-          sprite.play(`worker-${direction}`, true);
+          this.safelyPlay(sprite, `worker-${direction}`);
         },
         () => {
           sprite.setTexture("worker-harvest");
-          sprite.play("worker-harvest-loop");
+          this.safelyPlay(sprite, "worker-harvest-loop");
           this.floatText("작업 시작", target[0], target[1] - 48);
         },
       );
     }
-    while (this.workers.length > this.state.workers) this.workers.pop()?.destroy();
+    while (this.workers.length > this.state.workers) {
+      const worker = this.workers.pop();
+      if (worker) this.destroySprite(worker);
+    }
   }
 
   private renderMainBuilding() {
@@ -285,6 +305,12 @@ export class VillageScene extends Phaser.Scene {
     if (!this.anims.exists("merchant-idle-loop")) {
       this.createDirectionalAnimation("merchant-walk", "merchant");
     }
+    if (!this.anims.exists("product-wagon-down")) {
+      this.createDirectionalAnimation("product-wagon", "product-wagon");
+    }
+    if (!this.anims.exists("farm-dog-down")) {
+      this.createDirectionalAnimation("farm-dog", "farm-dog");
+    }
   }
 
   private createDirectionalAnimation(texture: string, prefix: string) {
@@ -316,6 +342,20 @@ export class VillageScene extends Phaser.Scene {
     return points;
   }
 
+  private isSpriteAlive(sprite: Phaser.GameObjects.Sprite) {
+    return sprite.active && Boolean(sprite.scene);
+  }
+
+  private safelyPlay(sprite: Phaser.GameObjects.Sprite, key: string, ignoreIfPlaying = true) {
+    if (!this.isSpriteAlive(sprite) || !this.anims.exists(key)) return;
+    sprite.play(key, ignoreIfPlaying);
+  }
+
+  private destroySprite(sprite: Phaser.GameObjects.Sprite) {
+    this.tweens.killTweensOf(sprite);
+    if (this.isSpriteAlive(sprite)) sprite.destroy();
+  }
+
   private moveSpriteOrthogonally(
     sprite: Phaser.GameObjects.Sprite,
     targets: Array<[number, number]>,
@@ -323,15 +363,18 @@ export class VillageScene extends Phaser.Scene {
     onSegment?: (from: [number, number], to: [number, number]) => void,
     onComplete?: () => void,
   ) {
+    if (!this.isSpriteAlive(sprite)) return;
     let previousPoint: [number, number] = [sprite.x, sprite.y];
     const points = this.expandOrthogonalPath(previousPoint, targets);
     const moveToPoint = (index: number) => {
+      if (!this.isSpriteAlive(sprite)) return;
       const point = points[index];
       if (!point) {
         onComplete?.();
         return;
       }
       onSegment?.(previousPoint, point);
+      if (!this.isSpriteAlive(sprite)) return;
       this.tweens.add({
         targets: sprite,
         x: point[0],
@@ -339,6 +382,7 @@ export class VillageScene extends Phaser.Scene {
         duration: (Phaser.Math.Distance.Between(previousPoint[0], previousPoint[1], point[0], point[1]) / speed) * 1000,
         ease: "Linear",
         onComplete: () => {
+          if (!this.isSpriteAlive(sprite)) return;
           previousPoint = point;
           moveToPoint(index + 1);
         },
@@ -357,7 +401,8 @@ export class VillageScene extends Phaser.Scene {
     this.workers.forEach((worker, index) => {
       const [x, y] = this.getWorkerSpot(index);
       this.tweens.killTweensOf(worker);
-      worker.setPosition(x, y).setTexture("worker-harvest").play("worker-harvest-loop");
+      worker.setPosition(x, y).setTexture("worker-harvest");
+      this.safelyPlay(worker, "worker-harvest-loop");
     });
   }
 
@@ -366,7 +411,7 @@ export class VillageScene extends Phaser.Scene {
     const ids = new Set(this.state.merchants.map((merchant) => merchant.id));
     this.merchants.forEach((sprite, id) => {
       if (!ids.has(id)) {
-        sprite.destroy();
+        this.destroySprite(sprite);
         this.merchants.delete(id);
       }
     });
@@ -376,33 +421,35 @@ export class VillageScene extends Phaser.Scene {
         this.merchants.set(merchant.id, sprite);
       }
       const sprite = this.merchants.get(merchant.id)!;
-      if (merchant.status === "idle" && !this.tweens.isTweening(sprite)) {
-        sprite.setTexture("merchant-walk").setScale(1.12).setAlpha(0).play("merchant-down", true);
+      if (merchant.status === "traveling" && this.state?.isVisit && !this.tweens.isTweening(sprite) && !sprite.getData("ambient")) {
+        this.animateAmbientMerchant(sprite, merchant.target ?? this.state.selectedRegion ?? "rural");
+      } else if (merchant.status === "idle" && !this.tweens.isTweening(sprite)) {
+        this.safelyPlay(sprite.setTexture("merchant-walk").setScale(1.12).setAlpha(this.state?.isVisit ? 1 : 0), "merchant-down");
       }
     });
   }
 
   private renderAnimals() {
     if (!this.state) return;
-    this.animals.forEach((animal) => animal.destroy());
+    this.animals.forEach((animal) => this.destroySprite(animal));
     this.animals = [];
-    if (this.state.hasDog) this.addAnimal("강아지", 1000, 900);
-    if (this.state.hasChicken) this.addAnimal("닭", 1060, 950);
+    if (this.state.hasDog) this.addDog(1000, 900);
   }
 
-  private addAnimal(label: string, x: number, y: number) {
-    const animal = this.add
-      .text(x, y, label, {
-        fontFamily: "Arial",
-        fontSize: "18px",
-        color: "#3b210e",
-        backgroundColor: "#ffe9a8",
-        padding: { x: 8, y: 5 },
-      })
-      .setOrigin(0.5)
-      .setDepth(95);
-    this.animals.push(animal);
-    this.tweens.add({ targets: animal, x: x + 45, yoyo: true, repeat: -1, duration: 1800, ease: "Sine.easeInOut" });
+  private addDog(x: number, y: number) {
+    const dog = this.add.sprite(x, y, "farm-dog", 0).setScale(1.05).setDepth(95);
+    this.safelyPlay(dog, "farm-dog-right");
+    this.animals.push(dog);
+    this.tweens.add({
+      targets: dog,
+      x: x + 70,
+      yoyo: true,
+      repeat: -1,
+      duration: 2200,
+      ease: "Sine.easeInOut",
+      onYoyo: () => this.safelyPlay(dog, "farm-dog-left"),
+      onRepeat: () => this.safelyPlay(dog, "farm-dog-right"),
+    });
   }
 
   private startPlacement(building: BuildingSpec) {
@@ -504,7 +551,7 @@ export class VillageScene extends Phaser.Scene {
     if (!sprite) return;
     const targetPoints: Record<RegionId, [number, number]> = {
       mountain: [330, 240],
-      factory: [2050, 280],
+      mine: [2050, 280],
       rural: [360, 1260],
       coast: [2070, 1230],
     };
@@ -518,11 +565,12 @@ export class VillageScene extends Phaser.Scene {
       MERCHANT_SPEED,
       (from, to) => {
         const direction = this.directionFromDelta(to[0] - from[0], to[1] - from[1]);
-        sprite.play(`merchant-cart-${direction}`, true);
+        this.safelyPlay(sprite, `merchant-cart-${direction}`);
       },
       () => {
         sprite.setAlpha(0).setPosition(outboundTarget[0], outboundTarget[1]);
         this.time.delayedCall(5000, () => {
+          if (!this.isSpriteAlive(sprite)) return;
           sprite.setTexture("merchant-cart").setScale(0.88).setAlpha(1).setPosition(outboundTarget[0], outboundTarget[1]);
           this.moveSpriteOrthogonally(
             sprite,
@@ -530,11 +578,82 @@ export class VillageScene extends Phaser.Scene {
             MERCHANT_SPEED,
             (from, to) => {
               const direction = this.directionFromDelta(to[0] - from[0], to[1] - from[1]);
-              sprite.play(`merchant-cart-${direction}`, true);
+              this.safelyPlay(sprite, `merchant-cart-${direction}`);
             },
             () => {
-              sprite.setTexture("merchant-walk").setScale(1.12).setPosition(MAIN_FRONT[0], MAIN_FRONT[1]).setAlpha(0).play("merchant-down", true);
+              sprite.setTexture("merchant-walk").setScale(1.12).setPosition(MAIN_FRONT[0], MAIN_FRONT[1]).setAlpha(0);
+              this.safelyPlay(sprite, "merchant-down");
               this.emitToReact({ type: "merchantReturned", merchantId });
+            },
+          );
+        });
+      },
+    );
+  }
+
+  private animateAmbientMerchant(sprite: Phaser.GameObjects.Sprite, target: RegionId) {
+    const targetPoints: Record<RegionId, [number, number]> = {
+      mountain: [330, 240],
+      mine: [2050, 280],
+      rural: [360, 1260],
+      coast: [2070, 1230],
+    };
+    const route = this.tuning.merchantRoutes[target]?.length ? this.tuning.merchantRoutes[target]! : [targetPoints[target]];
+    sprite.setData("ambient", true);
+    sprite.setPosition(MAIN_FRONT[0], MAIN_FRONT[1]).setTexture("merchant-cart").setScale(0.88).setAlpha(1);
+    this.moveSpriteOrthogonally(
+      sprite,
+      route,
+      MERCHANT_SPEED * 0.85,
+      (from, to) => this.safelyPlay(sprite, `merchant-cart-${this.directionFromDelta(to[0] - from[0], to[1] - from[1])}`),
+      () => {
+        const returnRoute = [...route].reverse();
+        this.time.delayedCall(1200, () => {
+          if (!this.isSpriteAlive(sprite)) return;
+          this.moveSpriteOrthogonally(
+            sprite,
+            [...returnRoute.slice(1), MAIN_FRONT],
+            MERCHANT_SPEED * 0.85,
+            (from, to) => this.safelyPlay(sprite, `merchant-cart-${this.directionFromDelta(to[0] - from[0], to[1] - from[1])}`),
+            () => {
+              sprite.setData("ambient", false);
+            },
+          );
+        });
+      },
+    );
+  }
+
+  private animateProductWagon(target: RegionId) {
+    const targetPoints: Record<RegionId, [number, number]> = {
+      mountain: [330, 240],
+      mine: [2050, 280],
+      rural: [360, 1260],
+      coast: [2070, 1230],
+    };
+    const route = this.tuning.merchantRoutes[target]?.length ? this.tuning.merchantRoutes[target]! : [targetPoints[target]];
+    const returnRoute = [...route].reverse();
+    const outboundTarget = route[route.length - 1] ?? targetPoints[target];
+    const sprite = this.add.sprite(MAIN_FRONT[0], MAIN_FRONT[1], "product-wagon", 0).setScale(0.94).setDepth(110);
+    this.moveSpriteOrthogonally(
+      sprite,
+      route,
+      MERCHANT_SPEED * 0.78,
+      (from, to) => this.safelyPlay(sprite, `product-wagon-${this.directionFromDelta(to[0] - from[0], to[1] - from[1])}`),
+      () => {
+        sprite.setAlpha(0).setPosition(outboundTarget[0], outboundTarget[1]);
+        this.time.delayedCall(3800, () => {
+          if (!this.isSpriteAlive(sprite)) return;
+          sprite.setAlpha(1).setPosition(outboundTarget[0], outboundTarget[1]);
+          this.moveSpriteOrthogonally(
+            sprite,
+            [...returnRoute.slice(1), MAIN_FRONT],
+            MERCHANT_SPEED * 0.78,
+            (from, to) => this.safelyPlay(sprite, `product-wagon-${this.directionFromDelta(to[0] - from[0], to[1] - from[1])}`),
+            () => {
+              this.destroySprite(sprite);
+              const product = regions[target].product;
+              this.emitToReact({ type: "productWagonReturned", target, product });
             },
           );
         });
@@ -555,7 +674,7 @@ export class VillageScene extends Phaser.Scene {
       MERCHANT_SPEED,
       (from, to) => {
         const direction = this.directionFromDelta(to[0] - from[0], to[1] - from[1]);
-        sprite?.play(`merchant-${direction}`, true);
+        this.safelyPlay(sprite, `merchant-${direction}`);
       },
       () => {
         sprite?.setAlpha(0).setPosition(MAIN_FRONT[0], MAIN_FRONT[1]);

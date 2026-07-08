@@ -40,4 +40,7 @@ function routeTuningSaver() {
 
 export default defineConfig({
   plugins: [react(), routeTuningSaver()],
+  preview: {
+    allowedHosts: true,
+  },
 });
