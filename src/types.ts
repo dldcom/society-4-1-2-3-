@@ -36,6 +36,7 @@ export type GameState = {
   autoBonus: number;
   builtStage: number;
   buildings: PlacedBuilding[];
+  companions?: Partial<Record<RegionId, boolean>>;
   hasDog: boolean;
   stats: GameStats;
   success: boolean;

@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { buildingAssetPath, regions, type BuildingSpec, type RegionId } from "./gameData";
+import { buildingAssetIds, buildingAssetPath, mainBuildingAssetPath, regions, type BuildingSpec, type RegionId } from "./gameData";
 import type { BuildZoneRect, GameState, RouteTuning, SceneCommand, SceneEvent } from "./types";
 
 const WORLD_W = 2400;
@@ -39,6 +39,62 @@ const RESOURCE_SPOTS: Record<RegionId, Array<[number, number]>> = {
 };
 
 type EmitEvent = (event: SceneEvent) => void;
+type CharacterSpriteKind = "workerWalk" | "workerHarvest" | "merchantWalk" | "merchantCart" | "productWagon";
+type Direction = "down" | "left" | "right" | "up";
+
+const buildingTextureKey = (regionId: RegionId, asset: BuildingSpec["asset"]) => `building-${regionId}-${asset}`;
+const mainBuildingTextureKey = (regionId: RegionId) => `building-${regionId}-main`;
+const characterTextureKey = (regionId: RegionId, kind: CharacterSpriteKind) => `character-${regionId}-${kind}`;
+const animalTextureKey = (regionId: RegionId) => `animal-${regionId}`;
+const animalAnimationKey = (regionId: RegionId, direction: Direction) => `animal-${regionId}-${direction}`;
+const workerHarvestAnimationKey = (regionId: RegionId) => `worker-harvest-${regionId}-loop`;
+const characterAnimationKey = (regionId: RegionId, role: "worker" | "merchant" | "merchant-cart" | "product-wagon", direction: Direction) =>
+  `${role}-${regionId}-${direction}`;
+
+const characterSpriteSheets: Record<RegionId, Record<CharacterSpriteKind, string>> = {
+  rural: {
+    workerWalk: "/assets/workers/rural-worker-walk-4x4.webp",
+    workerHarvest: "/assets/workers/rural-worker-harvest-4x4.webp",
+    merchantWalk: "/assets/merchants/merchant-walk-4x4.webp",
+    merchantCart: "/assets/merchants/merchant-cart-walk-4x4.webp",
+    productWagon: "/assets/merchants/product-wagon-merchant-walk-4x4.webp",
+  },
+  mountain: {
+    workerWalk: "/assets/workers/mountain-worker-walk-4x4.png",
+    workerHarvest: "/assets/workers/mountain-worker-harvest-4x4.png",
+    merchantWalk: "/assets/merchants/mountain-merchant-walk-4x4.png",
+    merchantCart: "/assets/merchants/mountain-merchant-cart-walk-4x4.png",
+    productWagon: "/assets/merchants/mountain-product-wagon-merchant-walk-4x4.png",
+  },
+  mine: {
+    workerWalk: "/assets/workers/mine-worker-walk-4x4.png",
+    workerHarvest: "/assets/workers/mine-worker-harvest-4x4.png",
+    merchantWalk: "/assets/merchants/mine-merchant-walk-4x4.png",
+    merchantCart: "/assets/merchants/mine-merchant-cart-walk-4x4.png",
+    productWagon: "/assets/merchants/mine-product-wagon-merchant-walk-4x4.png",
+  },
+  coast: {
+    workerWalk: "/assets/workers/coast-worker-walk-4x4.png",
+    workerHarvest: "/assets/workers/coast-worker-harvest-4x4.png",
+    merchantWalk: "/assets/merchants/coast-merchant-walk-4x4.png",
+    merchantCart: "/assets/merchants/coast-merchant-cart-walk-4x4.png",
+    productWagon: "/assets/merchants/coast-product-wagon-merchant-walk-4x4.png",
+  },
+};
+
+const animalSpriteSheets: Record<RegionId, string> = {
+  rural: "/assets/animals/farm-dog-walk-4x4.webp",
+  mountain: "/assets/animals/forest-squirrel-walk-4x4.png",
+  mine: "/assets/animals/mine-mole-walk-4x4.png",
+  coast: "/assets/animals/coast-otter-walk-4x4.png",
+};
+
+const animalScales: Record<RegionId, number> = {
+  rural: 1.05,
+  mountain: 0.62,
+  mine: 0.64,
+  coast: 0.68,
+};
 
 export class VillageScene extends Phaser.Scene {
   private emitToReact: EmitEvent;
@@ -72,32 +128,25 @@ export class VillageScene extends Phaser.Scene {
 
   preload() {
     Object.values(regions).forEach((region) => this.load.image(`bg-${region.id}`, region.bg));
-    ["basic", "storage", "worker", "craft", "advanced", "final"].forEach((asset) => {
-      this.load.image(`building-${asset}`, buildingAssetPath(asset as BuildingSpec["asset"]));
+    Object.values(regions).forEach((region) => {
+      buildingAssetIds.forEach((asset) => {
+        this.load.image(buildingTextureKey(region.id, asset), buildingAssetPath(region.id, asset));
+      });
+      this.load.image(mainBuildingTextureKey(region.id), mainBuildingAssetPath(region.id));
     });
-    this.load.spritesheet("worker-walk", "/assets/workers/rural-worker-walk-4x4.webp", {
-      frameWidth: 64,
-      frameHeight: 64,
+    Object.values(regions).forEach((region) => {
+      const sheets = characterSpriteSheets[region.id];
+      this.load.spritesheet(characterTextureKey(region.id, "workerWalk"), sheets.workerWalk, { frameWidth: 64, frameHeight: 64 });
+      this.load.spritesheet(characterTextureKey(region.id, "workerHarvest"), sheets.workerHarvest, { frameWidth: 64, frameHeight: 64 });
+      this.load.spritesheet(characterTextureKey(region.id, "merchantWalk"), sheets.merchantWalk, { frameWidth: 64, frameHeight: 64 });
+      this.load.spritesheet(characterTextureKey(region.id, "merchantCart"), sheets.merchantCart, { frameWidth: 96, frameHeight: 96 });
+      this.load.spritesheet(characterTextureKey(region.id, "productWagon"), sheets.productWagon, { frameWidth: 96, frameHeight: 96 });
     });
-    this.load.spritesheet("worker-harvest", "/assets/workers/rural-worker-harvest-4x4.webp", {
-      frameWidth: 64,
-      frameHeight: 64,
-    });
-    this.load.spritesheet("merchant-walk", "/assets/merchants/merchant-walk-4x4.webp", {
-      frameWidth: 64,
-      frameHeight: 64,
-    });
-    this.load.spritesheet("merchant-cart", "/assets/merchants/merchant-cart-walk-4x4.webp", {
-      frameWidth: 96,
-      frameHeight: 96,
-    });
-    this.load.spritesheet("product-wagon", "/assets/merchants/product-wagon-merchant-walk-4x4.webp", {
-      frameWidth: 96,
-      frameHeight: 96,
-    });
-    this.load.spritesheet("farm-dog", "/assets/animals/farm-dog-walk-4x4.webp", {
-      frameWidth: 64,
-      frameHeight: 64,
+    Object.entries(animalSpriteSheets).forEach(([regionId, path]) => {
+      this.load.spritesheet(animalTextureKey(regionId as RegionId), path, {
+        frameWidth: 64,
+        frameHeight: 64,
+      });
     });
   }
 
@@ -202,7 +251,7 @@ export class VillageScene extends Phaser.Scene {
       let sprite = this.buildings.get(building.id);
       if (!sprite) {
         sprite = this.add
-          .image(building.x, building.y, `building-${building.spec.asset}`)
+          .image(building.x, building.y, buildingTextureKey(region.id, building.spec.asset))
           .setDisplaySize(160, 160)
           .setInteractive({ useHandCursor: true })
           .setDepth(20 + building.y / 10);
@@ -227,6 +276,7 @@ export class VillageScene extends Phaser.Scene {
           .setDepth(70);
         this.labels.set(building.id, label);
       }
+      sprite.setTexture(buildingTextureKey(region.id, building.spec.asset));
       sprite.setPosition(building.x, building.y).setDepth(20 + building.y / 10);
       this.labels.get(building.id)?.setPosition(building.x, building.y + 88);
     });
@@ -238,10 +288,11 @@ export class VillageScene extends Phaser.Scene {
 
   private renderWorkers() {
     if (!this.state?.selectedRegion) return;
+    const regionId = this.currentRegion();
     while (this.workers.length < this.state.workers) {
       const index = this.workers.length;
       const target = this.getWorkerSpot(index);
-      const sprite = this.add.sprite(MAIN_FRONT[0], MAIN_FRONT[1], "worker-walk", 0).setScale(WORKER_SCALE).setDepth(80);
+      const sprite = this.add.sprite(MAIN_FRONT[0], MAIN_FRONT[1], characterTextureKey(regionId, "workerWalk"), 0).setScale(WORKER_SCALE).setDepth(80);
       this.workers.push(sprite);
       this.moveSpriteOrthogonally(
         sprite,
@@ -249,11 +300,11 @@ export class VillageScene extends Phaser.Scene {
         WORKER_SPEED,
         (from, to) => {
           const direction = this.directionFromDelta(to[0] - from[0], to[1] - from[1]);
-          this.safelyPlay(sprite, `worker-${direction}`);
+          this.safelyPlay(sprite, characterAnimationKey(regionId, "worker", direction));
         },
         () => {
-          sprite.setTexture("worker-harvest");
-          this.safelyPlay(sprite, "worker-harvest-loop");
+          sprite.setTexture(characterTextureKey(regionId, "workerHarvest"));
+          this.safelyPlay(sprite, workerHarvestAnimationKey(regionId));
           this.floatText("작업 시작", target[0], target[1] - 48);
         },
       );
@@ -265,9 +316,10 @@ export class VillageScene extends Phaser.Scene {
   }
 
   private renderMainBuilding() {
+    const regionId = this.state?.selectedRegion ?? this.initialRegion;
     if (!this.mainBuilding) {
       this.mainBuilding = this.add
-        .image(MAIN_BUILDING[0], MAIN_BUILDING[1], "building-final")
+        .image(MAIN_BUILDING[0], MAIN_BUILDING[1], mainBuildingTextureKey(regionId))
         .setDisplaySize(190, 190)
         .setInteractive({ useHandCursor: true })
         .setDepth(20 + MAIN_BUILDING[1] / 10);
@@ -285,36 +337,30 @@ export class VillageScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setDepth(70);
     }
+    this.mainBuilding.setTexture(mainBuildingTextureKey(regionId));
   }
 
   private createAnimations() {
-    if (!this.anims.exists("worker-harvest-loop")) {
-      this.anims.create({
-        key: "worker-harvest-loop",
-        frames: this.anims.generateFrameNumbers("worker-harvest", { start: 0, end: 3 }),
-        frameRate: 6,
-        repeat: -1,
-      });
-    }
-    if (!this.anims.exists("worker-down")) {
-      this.createDirectionalAnimation("worker-walk", "worker");
-    }
-    if (!this.anims.exists("merchant-cart-loop")) {
-      this.createDirectionalAnimation("merchant-cart", "merchant-cart");
-    }
-    if (!this.anims.exists("merchant-idle-loop")) {
-      this.createDirectionalAnimation("merchant-walk", "merchant");
-    }
-    if (!this.anims.exists("product-wagon-down")) {
-      this.createDirectionalAnimation("product-wagon", "product-wagon");
-    }
-    if (!this.anims.exists("farm-dog-down")) {
-      this.createDirectionalAnimation("farm-dog", "farm-dog");
-    }
+    Object.values(regions).forEach((region) => {
+      const harvestKey = workerHarvestAnimationKey(region.id);
+      if (!this.anims.exists(harvestKey)) {
+        this.anims.create({
+          key: harvestKey,
+          frames: this.anims.generateFrameNumbers(characterTextureKey(region.id, "workerHarvest"), { start: 0, end: 3 }),
+          frameRate: 6,
+          repeat: -1,
+        });
+      }
+      this.createDirectionalAnimation(characterTextureKey(region.id, "workerWalk"), `worker-${region.id}`);
+      this.createDirectionalAnimation(characterTextureKey(region.id, "merchantWalk"), `merchant-${region.id}`);
+      this.createDirectionalAnimation(characterTextureKey(region.id, "merchantCart"), `merchant-cart-${region.id}`);
+      this.createDirectionalAnimation(characterTextureKey(region.id, "productWagon"), `product-wagon-${region.id}`);
+    });
+    Object.values(regions).forEach((region) => this.createDirectionalAnimation(animalTextureKey(region.id), `animal-${region.id}`));
   }
 
   private createDirectionalAnimation(texture: string, prefix: string) {
-    (["down", "left", "right", "up"] as const).forEach((direction, row) => {
+    (["down", "left", "right", "up"] as Direction[]).forEach((direction, row) => {
       const key = `${prefix}-${direction}`;
       if (this.anims.exists(key)) return;
       this.anims.create({
@@ -326,9 +372,13 @@ export class VillageScene extends Phaser.Scene {
     });
   }
 
-  private directionFromDelta(dx: number, dy: number) {
+  private directionFromDelta(dx: number, dy: number): Direction {
     if (Math.abs(dx) > Math.abs(dy)) return dx >= 0 ? "right" : "left";
     return dy >= 0 ? "down" : "up";
+  }
+
+  private currentRegion(): RegionId {
+    return this.state?.selectedRegion ?? this.initialRegion;
   }
 
   private expandOrthogonalPath(start: [number, number], targets: Array<[number, number]>): Array<[number, number]> {
@@ -398,16 +448,18 @@ export class VillageScene extends Phaser.Scene {
   }
 
   private repositionWorkers() {
+    const regionId = this.currentRegion();
     this.workers.forEach((worker, index) => {
       const [x, y] = this.getWorkerSpot(index);
       this.tweens.killTweensOf(worker);
-      worker.setPosition(x, y).setTexture("worker-harvest");
-      this.safelyPlay(worker, "worker-harvest-loop");
+      worker.setPosition(x, y).setTexture(characterTextureKey(regionId, "workerHarvest"));
+      this.safelyPlay(worker, workerHarvestAnimationKey(regionId));
     });
   }
 
   private renderMerchants() {
     if (!this.state) return;
+    const regionId = this.currentRegion();
     const ids = new Set(this.state.merchants.map((merchant) => merchant.id));
     this.merchants.forEach((sprite, id) => {
       if (!ids.has(id)) {
@@ -417,45 +469,68 @@ export class VillageScene extends Phaser.Scene {
     });
     this.state.merchants.forEach((merchant, index) => {
       if (!this.merchants.has(merchant.id)) {
-        const sprite = this.add.sprite(MAIN_FRONT[0] + index * 12, MAIN_FRONT[1], "merchant-walk", 0).setScale(1.12).setAlpha(0).setDepth(90);
+        const sprite = this.add
+          .sprite(MAIN_FRONT[0] + index * 12, MAIN_FRONT[1], characterTextureKey(regionId, "merchantWalk"), 0)
+          .setScale(WORKER_SCALE)
+          .setAlpha(0)
+          .setDepth(90);
         this.merchants.set(merchant.id, sprite);
       }
       const sprite = this.merchants.get(merchant.id)!;
       if (merchant.status === "traveling" && this.state?.isVisit && !this.tweens.isTweening(sprite) && !sprite.getData("ambient")) {
         this.animateAmbientMerchant(sprite, merchant.target ?? this.state.selectedRegion ?? "rural");
       } else if (merchant.status === "idle" && !this.tweens.isTweening(sprite)) {
-        this.safelyPlay(sprite.setTexture("merchant-walk").setScale(1.12).setAlpha(this.state?.isVisit ? 1 : 0), "merchant-down");
+        this.safelyPlay(
+          sprite.setTexture(characterTextureKey(regionId, "merchantWalk")).setScale(WORKER_SCALE).setAlpha(this.state?.isVisit ? 1 : 0),
+          characterAnimationKey(regionId, "merchant", "down"),
+        );
       }
     });
   }
 
   private renderAnimals() {
     if (!this.state) return;
-    this.animals.forEach((animal) => this.destroySprite(animal));
-    this.animals = [];
-    if (this.state.hasDog) this.addDog(1000, 900);
+    const regionId = this.currentRegion();
+    const hasCompanion = Boolean(this.state.companions?.[regionId] || (regionId === "rural" && this.state.hasDog));
+    const currentAnimalRegion = this.animals[0]?.getData("regionId") as RegionId | undefined;
+    if (!hasCompanion || currentAnimalRegion !== regionId) {
+      this.animals.forEach((animal) => this.destroySprite(animal));
+      this.animals = [];
+      if (!hasCompanion) return;
+    }
+    if (!this.animals.some((animal) => this.isSpriteAlive(animal))) {
+      this.animals = [];
+      this.addCompanion(regionId, 1000, 900);
+      return;
+    }
   }
 
-  private addDog(x: number, y: number) {
-    const dog = this.add.sprite(x, y, "farm-dog", 0).setScale(1.05).setDepth(95);
-    this.safelyPlay(dog, "farm-dog-right");
-    this.animals.push(dog);
+  private addCompanion(regionId: RegionId, x: number, y: number) {
+    const companion = this.add.sprite(x, y, animalTextureKey(regionId), 0).setScale(animalScales[regionId]).setDepth(95);
+    companion.setData("regionId", regionId);
+    this.safelyPlay(companion, animalAnimationKey(regionId, "right"));
+    this.animals.push(companion);
     this.tweens.add({
-      targets: dog,
+      targets: companion,
       x: x + 70,
       yoyo: true,
       repeat: -1,
       duration: 2200,
       ease: "Sine.easeInOut",
-      onYoyo: () => this.safelyPlay(dog, "farm-dog-left"),
-      onRepeat: () => this.safelyPlay(dog, "farm-dog-right"),
+      onYoyo: () => this.safelyPlay(companion, animalAnimationKey(regionId, "left")),
+      onRepeat: () => this.safelyPlay(companion, animalAnimationKey(regionId, "right")),
     });
   }
 
   private startPlacement(building: BuildingSpec) {
     this.placement = building;
     this.preview?.destroy();
-    this.preview = this.add.image(WORLD_W / 2, WORLD_H / 2, `building-${building.asset}`).setDisplaySize(168, 168).setAlpha(0.65).setDepth(200);
+    const regionId = this.state?.selectedRegion ?? this.initialRegion;
+    this.preview = this.add
+      .image(WORLD_W / 2, WORLD_H / 2, buildingTextureKey(regionId, building.asset))
+      .setDisplaySize(168, 168)
+      .setAlpha(0.65)
+      .setDepth(200);
   }
 
   private cancelPlacement() {
@@ -549,6 +624,7 @@ export class VillageScene extends Phaser.Scene {
   private animateMerchant(merchantId: string, target: RegionId) {
     const sprite = this.merchants.get(merchantId);
     if (!sprite) return;
+    const regionId = this.currentRegion();
     const targetPoints: Record<RegionId, [number, number]> = {
       mountain: [330, 240],
       mine: [2050, 280],
@@ -558,31 +634,31 @@ export class VillageScene extends Phaser.Scene {
     const route = this.tuning.merchantRoutes[target]?.length ? this.tuning.merchantRoutes[target]! : [targetPoints[target]];
     const returnRoute = [...route].reverse();
     const outboundTarget = route[route.length - 1] ?? targetPoints[target];
-    sprite.setPosition(MAIN_FRONT[0], MAIN_FRONT[1]).setTexture("merchant-cart").setScale(0.88).setAlpha(1);
+    sprite.setPosition(MAIN_FRONT[0], MAIN_FRONT[1]).setTexture(characterTextureKey(regionId, "merchantCart")).setScale(0.88).setAlpha(1);
     this.moveSpriteOrthogonally(
       sprite,
       route,
       MERCHANT_SPEED,
-      (from, to) => {
-        const direction = this.directionFromDelta(to[0] - from[0], to[1] - from[1]);
-        this.safelyPlay(sprite, `merchant-cart-${direction}`);
-      },
+        (from, to) => {
+          const direction = this.directionFromDelta(to[0] - from[0], to[1] - from[1]);
+          this.safelyPlay(sprite, characterAnimationKey(regionId, "merchant-cart", direction));
+        },
       () => {
         sprite.setAlpha(0).setPosition(outboundTarget[0], outboundTarget[1]);
         this.time.delayedCall(5000, () => {
           if (!this.isSpriteAlive(sprite)) return;
-          sprite.setTexture("merchant-cart").setScale(0.88).setAlpha(1).setPosition(outboundTarget[0], outboundTarget[1]);
+          sprite.setTexture(characterTextureKey(regionId, "merchantCart")).setScale(0.88).setAlpha(1).setPosition(outboundTarget[0], outboundTarget[1]);
           this.moveSpriteOrthogonally(
             sprite,
             [...returnRoute.slice(1), MAIN_FRONT],
             MERCHANT_SPEED,
             (from, to) => {
               const direction = this.directionFromDelta(to[0] - from[0], to[1] - from[1]);
-              this.safelyPlay(sprite, `merchant-cart-${direction}`);
+              this.safelyPlay(sprite, characterAnimationKey(regionId, "merchant-cart", direction));
             },
             () => {
-              sprite.setTexture("merchant-walk").setScale(1.12).setPosition(MAIN_FRONT[0], MAIN_FRONT[1]).setAlpha(0);
-              this.safelyPlay(sprite, "merchant-down");
+              sprite.setTexture(characterTextureKey(regionId, "merchantWalk")).setScale(WORKER_SCALE).setPosition(MAIN_FRONT[0], MAIN_FRONT[1]).setAlpha(0);
+              this.safelyPlay(sprite, characterAnimationKey(regionId, "merchant", "down"));
               this.emitToReact({ type: "merchantReturned", merchantId });
             },
           );
@@ -592,6 +668,7 @@ export class VillageScene extends Phaser.Scene {
   }
 
   private animateAmbientMerchant(sprite: Phaser.GameObjects.Sprite, target: RegionId) {
+    const regionId = this.currentRegion();
     const targetPoints: Record<RegionId, [number, number]> = {
       mountain: [330, 240],
       mine: [2050, 280],
@@ -600,12 +677,12 @@ export class VillageScene extends Phaser.Scene {
     };
     const route = this.tuning.merchantRoutes[target]?.length ? this.tuning.merchantRoutes[target]! : [targetPoints[target]];
     sprite.setData("ambient", true);
-    sprite.setPosition(MAIN_FRONT[0], MAIN_FRONT[1]).setTexture("merchant-cart").setScale(0.88).setAlpha(1);
+    sprite.setPosition(MAIN_FRONT[0], MAIN_FRONT[1]).setTexture(characterTextureKey(regionId, "merchantCart")).setScale(0.88).setAlpha(1);
     this.moveSpriteOrthogonally(
       sprite,
       route,
       MERCHANT_SPEED * 0.85,
-      (from, to) => this.safelyPlay(sprite, `merchant-cart-${this.directionFromDelta(to[0] - from[0], to[1] - from[1])}`),
+      (from, to) => this.safelyPlay(sprite, characterAnimationKey(regionId, "merchant-cart", this.directionFromDelta(to[0] - from[0], to[1] - from[1]))),
       () => {
         const returnRoute = [...route].reverse();
         this.time.delayedCall(1200, () => {
@@ -614,7 +691,7 @@ export class VillageScene extends Phaser.Scene {
             sprite,
             [...returnRoute.slice(1), MAIN_FRONT],
             MERCHANT_SPEED * 0.85,
-            (from, to) => this.safelyPlay(sprite, `merchant-cart-${this.directionFromDelta(to[0] - from[0], to[1] - from[1])}`),
+            (from, to) => this.safelyPlay(sprite, characterAnimationKey(regionId, "merchant-cart", this.directionFromDelta(to[0] - from[0], to[1] - from[1]))),
             () => {
               sprite.setData("ambient", false);
             },
@@ -625,6 +702,7 @@ export class VillageScene extends Phaser.Scene {
   }
 
   private animateProductWagon(target: RegionId) {
+    const regionId = this.currentRegion();
     const targetPoints: Record<RegionId, [number, number]> = {
       mountain: [330, 240],
       mine: [2050, 280],
@@ -634,12 +712,12 @@ export class VillageScene extends Phaser.Scene {
     const route = this.tuning.merchantRoutes[target]?.length ? this.tuning.merchantRoutes[target]! : [targetPoints[target]];
     const returnRoute = [...route].reverse();
     const outboundTarget = route[route.length - 1] ?? targetPoints[target];
-    const sprite = this.add.sprite(MAIN_FRONT[0], MAIN_FRONT[1], "product-wagon", 0).setScale(0.94).setDepth(110);
+    const sprite = this.add.sprite(MAIN_FRONT[0], MAIN_FRONT[1], characterTextureKey(regionId, "productWagon"), 0).setScale(0.94).setDepth(110);
     this.moveSpriteOrthogonally(
       sprite,
       route,
       MERCHANT_SPEED * 0.78,
-      (from, to) => this.safelyPlay(sprite, `product-wagon-${this.directionFromDelta(to[0] - from[0], to[1] - from[1])}`),
+      (from, to) => this.safelyPlay(sprite, characterAnimationKey(regionId, "product-wagon", this.directionFromDelta(to[0] - from[0], to[1] - from[1]))),
       () => {
         sprite.setAlpha(0).setPosition(outboundTarget[0], outboundTarget[1]);
         this.time.delayedCall(3800, () => {
@@ -649,7 +727,7 @@ export class VillageScene extends Phaser.Scene {
             sprite,
             [...returnRoute.slice(1), MAIN_FRONT],
             MERCHANT_SPEED * 0.78,
-            (from, to) => this.safelyPlay(sprite, `product-wagon-${this.directionFromDelta(to[0] - from[0], to[1] - from[1])}`),
+            (from, to) => this.safelyPlay(sprite, characterAnimationKey(regionId, "product-wagon", this.directionFromDelta(to[0] - from[0], to[1] - from[1]))),
             () => {
               this.destroySprite(sprite);
               const product = regions[target].product;
@@ -662,19 +740,20 @@ export class VillageScene extends Phaser.Scene {
   }
 
   private animateMerchantEnter(merchantId: string, x: number, y: number) {
+    const regionId = this.currentRegion();
     let sprite = this.merchants.get(merchantId);
     if (!sprite) {
-      sprite = this.add.sprite(x, y, "merchant-walk", 0).setScale(1.12).setDepth(90);
+      sprite = this.add.sprite(x, y, characterTextureKey(regionId, "merchantWalk"), 0).setScale(WORKER_SCALE).setDepth(90);
       this.merchants.set(merchantId, sprite);
     }
-    sprite.setPosition(x, y).setTexture("merchant-walk").setScale(1.12).setAlpha(1);
+    sprite.setPosition(x, y).setTexture(characterTextureKey(regionId, "merchantWalk")).setScale(WORKER_SCALE).setAlpha(1);
     this.moveSpriteOrthogonally(
       sprite,
       [MAIN_FRONT],
       MERCHANT_SPEED,
       (from, to) => {
         const direction = this.directionFromDelta(to[0] - from[0], to[1] - from[1]);
-        this.safelyPlay(sprite, `merchant-${direction}`);
+        this.safelyPlay(sprite, characterAnimationKey(regionId, "merchant", direction));
       },
       () => {
         sprite?.setAlpha(0).setPosition(MAIN_FRONT[0], MAIN_FRONT[1]);

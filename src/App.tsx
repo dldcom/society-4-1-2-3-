@@ -4,7 +4,10 @@ import PhaserGame from "./PhaserGame";
 import generatedTuning from "./routeTuning.generated.json";
 import {
   allItems,
+  buildingAssetPath,
+  companionSpecs,
   itemNames,
+  mainBuildingAssetPath,
   productNames,
   regionList,
   regions,
@@ -29,6 +32,16 @@ const payCost = (resources: Record<ItemId, number>, cost: Partial<Record<ItemId,
   return next;
 };
 
+const emptyCompanions = (): Partial<Record<RegionId, boolean>> => ({
+  mountain: false,
+  mine: false,
+  rural: false,
+  coast: false,
+});
+
+const hasRegionCompanion = (game: GameState, regionId: RegionId) =>
+  Boolean(game.companions?.[regionId] || (regionId === "rural" && game.hasDog));
+
 const formatCost = (cost: Partial<Record<ItemId, number>>) =>
   Object.entries(cost)
     .map(([item, amount]) => `${itemNames[item as ItemId]} ${amount}`)
@@ -48,6 +61,7 @@ const makeInitialState = (regionId: RegionId): GameState => {
     autoBonus: 0,
     builtStage: 0,
     buildings: [],
+    companions: emptyCompanions(),
     hasDog: false,
     stats: { trades: 0, productTrades: 0, crafts: 0 },
     success: false,
@@ -90,7 +104,8 @@ const makeVisitState = (base: GameState, regionId: RegionId): GameState => {
       buildingId: `visit-${regionId}-1`,
       target: base.selectedRegion ?? "rural",
     })),
-    hasDog: regionId === "rural" && base.hasDog,
+    companions: { [regionId]: hasRegionCompanion(base, regionId) },
+    hasDog: regionId === "rural" && hasRegionCompanion(base, "rural"),
     isVisit: true,
   };
 };
@@ -174,8 +189,8 @@ export default function App() {
           const resources = { ...current.resources };
           let bonus = 0;
           resources[region.resource] += amount;
-          if (current.selectedRegion === "rural" && current.hasDog && Math.random() < 0.45) {
-            resources.grain += 1;
+          if (hasRegionCompanion(current, current.selectedRegion) && Math.random() < 0.45) {
+            resources[region.resource] += 1;
             bonus += 1;
           }
           const message =
@@ -405,10 +420,16 @@ export default function App() {
     setNotice("자동 생산이 강해졌어요.");
   };
 
-  const adoptDog = () => {
-    if (!game || game.selectedRegion !== "rural" || game.hasDog) return;
-    setGame({ ...game, hasDog: true, development: game.development + 2 });
-    setNotice("강아지를 입양했어요.");
+  const adoptCompanion = () => {
+    if (!game?.selectedRegion || hasRegionCompanion(game, game.selectedRegion)) return;
+    const regionId = game.selectedRegion;
+    setGame({
+      ...game,
+      companions: { ...emptyCompanions(), ...(game.companions ?? {}), [regionId]: true },
+      hasDog: regionId === "rural" ? true : game.hasDog,
+      development: game.development + 2,
+    });
+    setNotice(companionSpecs[regionId].adoptedMessage);
   };
 
   const sendTrade = () => {
@@ -618,7 +639,7 @@ export default function App() {
           <button className="close-button" onClick={() => setSelectedMainBuilding(false)} title="닫기">
             <X size={18} />
           </button>
-          <img src="/assets/buildings/final.webp" alt="" />
+          <img src={mainBuildingAssetPath(selectedRegion.id)} alt="" />
           <strong>마을 본부</strong>
           <span>{selectedRegion.name} · 중심 건물</span>
           <p>일꾼을 뽑고 상인을 보내는 곳</p>
@@ -633,7 +654,7 @@ export default function App() {
           <button className="close-button" onClick={() => setSelectedBuildingId(null)} title="닫기">
             <X size={18} />
           </button>
-          <img src={`/assets/buildings/${selectedBuilding.spec.asset}.webp`} alt="" />
+          <img src={buildingAssetPath(selectedRegion.id, selectedBuilding.spec.asset)} alt="" />
           <strong>{selectedBuilding.spec.name}</strong>
           <span>{selectedRegion.name} · {selectedBuilding.spec.stage}단계</span>
           <p>{selectedBuilding.spec.role} · {selectedBuilding.spec.effect}</p>
@@ -642,8 +663,10 @@ export default function App() {
               상인 뽑기
             </button>
           )}
-          {game.selectedRegion === "rural" && selectedBuilding.spec.stage === 2 && (
-            <button className="small-button" onClick={adoptDog} disabled={game.hasDog}>강아지 입양</button>
+          {selectedBuilding.spec.stage === 2 && game.selectedRegion && (
+            <button className="small-button" onClick={adoptCompanion} disabled={hasRegionCompanion(game, game.selectedRegion)}>
+              {companionSpecs[game.selectedRegion].action}
+            </button>
           )}
           {selectedBuilding.spec.stage === 3 && (
             <button className="small-button" onClick={openVisit}>이웃 마을 구경하기</button>
@@ -689,7 +712,7 @@ export default function App() {
                 type="button"
               >
                 <div className="build-card-image">
-                  <img src={`/assets/buildings/${building.asset}.webp`} alt="" />
+                  <img src={buildingAssetPath(selectedRegion.id, building.asset)} alt="" />
                 </div>
                 <div className="build-card-body">
                   <strong>{building.stage}. {building.name}</strong>

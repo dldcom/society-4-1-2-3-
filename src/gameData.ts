@@ -11,10 +11,19 @@ export type BuildingRole =
   | "교류"
   | "최종 완성";
 
+export type BuildingAssetId = "basic" | "storage" | "worker" | "craft" | "advanced" | "final";
+
+export type CompanionSpec = {
+  name: string;
+  action: string;
+  adoptedMessage: string;
+  resource: ResourceId;
+};
+
 export type BuildingSpec = {
   stage: number;
   name: string;
-  asset: "basic" | "storage" | "worker" | "craft" | "advanced" | "final";
+  asset: BuildingAssetId;
   role: BuildingRole;
   effect: string;
   cost: Partial<Record<ItemId, number>>;
@@ -53,6 +62,33 @@ export const itemNames: Record<ItemId, string> = {
   ...productNames,
 };
 
+export const companionSpecs: Record<RegionId, CompanionSpec> = {
+  mountain: {
+    name: "다람쥐",
+    action: "다람쥐 만나기",
+    adoptedMessage: "다람쥐가 숲길 친구가 되었어요.",
+    resource: "wood",
+  },
+  mine: {
+    name: "두더지",
+    action: "두더지 만나기",
+    adoptedMessage: "두더지가 광산 친구가 되었어요.",
+    resource: "minerals",
+  },
+  rural: {
+    name: "강아지",
+    action: "강아지 입양",
+    adoptedMessage: "강아지를 입양했어요.",
+    resource: "grain",
+  },
+  coast: {
+    name: "수달",
+    action: "수달 만나기",
+    adoptedMessage: "수달이 해안 친구가 되었어요.",
+    resource: "seafood",
+  },
+};
+
 const productFinalCost = (ownResource: ResourceId, ownProduct: ProductId): Partial<Record<ItemId, number>> => ({
   [ownResource]: 8,
   [ownProduct]: 2,
@@ -73,7 +109,7 @@ export const regions: Record<RegionId, RegionSpec> = {
     recipe: { wood: 2, grain: 1, minerals: 1, seafood: 1 },
     buildings: [
       { stage: 1, name: "작은 숲길", asset: "basic", role: "생산", effect: "나무 생산 기반", cost: { wood: 3 } },
-      { stage: 2, name: "목재 창고", asset: "storage", role: "창고", effect: "자원 보관 기반", cost: { wood: 4 } },
+      { stage: 2, name: "목재 창고", asset: "storage", role: "창고", effect: "다람쥐 만나기", cost: { wood: 4 } },
       { stage: 3, name: "나무꾼 쉼터", asset: "worker", role: "쉼터", effect: "이웃 마을 구경", cost: { wood: 5, grain: 1 } },
       { stage: 4, name: "목공 작업소", asset: "craft", role: "제작", effect: "숲속 생활 상자 제작", cost: { wood: 5, minerals: 2, seafood: 1 } },
       { stage: 5, name: "목재 작업장", asset: "advanced", role: "교류", effect: "상품 보내기", cost: { wood: 6, minerals: 2, grain: 1 } },
@@ -93,7 +129,7 @@ export const regions: Record<RegionId, RegionSpec> = {
     recipe: { minerals: 2, grain: 1, wood: 1, seafood: 1 },
     buildings: [
       { stage: 1, name: "작은 광산", asset: "basic", role: "생산", effect: "광물 생산 기반", cost: { minerals: 3 } },
-      { stage: 2, name: "광물 창고", asset: "storage", role: "창고", effect: "자원 보관 기반", cost: { minerals: 4 } },
+      { stage: 2, name: "광물 창고", asset: "storage", role: "창고", effect: "두더지 만나기", cost: { minerals: 4 } },
       { stage: 3, name: "광부 쉼터", asset: "worker", role: "쉼터", effect: "이웃 마을 구경", cost: { minerals: 5, grain: 1 } },
       { stage: 4, name: "대장간", asset: "craft", role: "제작", effect: "튼튼 도구 상자 제작", cost: { minerals: 5, wood: 2, seafood: 1 } },
       { stage: 5, name: "광산 작업장", asset: "advanced", role: "교류", effect: "상품 보내기", cost: { minerals: 6, wood: 3, grain: 1 } },
@@ -133,7 +169,7 @@ export const regions: Record<RegionId, RegionSpec> = {
     recipe: { seafood: 2, grain: 1, wood: 1, minerals: 1 },
     buildings: [
       { stage: 1, name: "작은 어장", asset: "basic", role: "생산", effect: "해산물 생산 기반", cost: { seafood: 3 } },
-      { stage: 2, name: "냉장 창고", asset: "storage", role: "창고", effect: "자원 보관 기반", cost: { seafood: 4 } },
+      { stage: 2, name: "냉장 창고", asset: "storage", role: "창고", effect: "수달 만나기", cost: { seafood: 4 } },
       { stage: 3, name: "어부 쉼터", asset: "worker", role: "쉼터", effect: "이웃 마을 구경", cost: { seafood: 5, grain: 1 } },
       { stage: 4, name: "바다 포장소", asset: "craft", role: "제작", effect: "바다 선물 상자 제작", cost: { seafood: 5, wood: 2, minerals: 1 } },
       { stage: 5, name: "해안 작업장", asset: "advanced", role: "교류", effect: "상품 보내기", cost: { seafood: 6, minerals: 2, grain: 1 } },
@@ -155,4 +191,52 @@ export const allItems: ItemId[] = [
   "seaGiftBox",
 ];
 
-export const buildingAssetPath = (asset: BuildingSpec["asset"]) => `/assets/buildings/${asset}.webp`;
+export const buildingAssetIds: BuildingAssetId[] = ["basic", "storage", "worker", "craft", "advanced", "final"];
+
+const ruralBuildingAssetPaths: Record<BuildingAssetId, string> = {
+  basic: "/assets/buildings/basic.webp",
+  storage: "/assets/buildings/storage.webp",
+  worker: "/assets/buildings/worker.webp",
+  craft: "/assets/buildings/craft.webp",
+  advanced: "/assets/buildings/advanced.webp",
+  final: "/assets/buildings/final.webp",
+};
+
+const regionalBuildingAssetPaths: Record<RegionId, Record<BuildingAssetId, string>> = {
+  rural: ruralBuildingAssetPaths,
+  mountain: {
+    basic: "/assets/buildings/candidates/mountain/01-small-forest-path.png",
+    storage: "/assets/buildings/candidates/mountain/02-lumber-storage.png",
+    worker: "/assets/buildings/candidates/mountain/03-woodcutter-rest.png",
+    craft: "/assets/buildings/candidates/mountain/04-carpentry-workshop.png",
+    advanced: "/assets/buildings/candidates/mountain/05-lumber-work-yard.png",
+    final: "/assets/buildings/candidates/mountain/06-forest-exchange-hall.png",
+  },
+  mine: {
+    basic: "/assets/buildings/candidates/mine/01-small-mine.png",
+    storage: "/assets/buildings/candidates/mine/02-mineral-storage.png",
+    worker: "/assets/buildings/candidates/mine/03-miner-rest.png",
+    craft: "/assets/buildings/candidates/mine/04-blacksmith-forge.png",
+    advanced: "/assets/buildings/candidates/mine/05-mining-workshop.png",
+    final: "/assets/buildings/candidates/mine/06-mining-exchange-hall.png",
+  },
+  coast: {
+    basic: "/assets/buildings/candidates/coast/01-small-fishery.png",
+    storage: "/assets/buildings/candidates/coast/02-seafood-storage.png",
+    worker: "/assets/buildings/candidates/coast/03-fisher-rest.png",
+    craft: "/assets/buildings/candidates/coast/04-sea-gift-packing.png",
+    advanced: "/assets/buildings/candidates/coast/05-coastal-workshop.png",
+    final: "/assets/buildings/candidates/coast/06-coastal-exchange-market.png",
+  },
+};
+
+const mainBuildingAssetPaths: Record<RegionId, string> = {
+  rural: "/assets/buildings/final.webp",
+  mountain: "/assets/buildings/candidates/mountain/07-main-hall.png",
+  mine: "/assets/buildings/candidates/mine/07-main-office.png",
+  coast: "/assets/buildings/candidates/coast/07-main-hall.png",
+};
+
+export const buildingAssetPath = (regionId: RegionId, asset: BuildingAssetId) => regionalBuildingAssetPaths[regionId][asset];
+
+export const mainBuildingAssetPath = (regionId: RegionId) => mainBuildingAssetPaths[regionId];
