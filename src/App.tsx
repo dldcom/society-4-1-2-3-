@@ -126,6 +126,7 @@ export default function App() {
   const [visitRegion, setVisitRegion] = useState<RegionId | null>(null);
   const [sceneBusy, setSceneBusy] = useState(false);
   const [productTradeTarget, setProductTradeTarget] = useState<RegionId | null>(null);
+  const [selectedBuildStage, setSelectedBuildStage] = useState<number | null>(null);
   const gameRef = useRef<GameState | null>(null);
   const editModeRef = useRef<typeof editMode>(null);
   const visitRegionRef = useRef<RegionId | null>(null);
@@ -528,6 +529,42 @@ export default function App() {
     });
   }, [game, selectedRegion]);
 
+  const selectedBuild = useMemo(() => {
+    if (!selectedRegion || selectedBuildStage === null) return null;
+    return selectedRegion.buildings.find((building) => building.stage === selectedBuildStage) ?? null;
+  }, [selectedBuildStage, selectedRegion]);
+
+  const selectedBuildStatus = useMemo(() => {
+    if (!selectedBuild || !selectedRegion) return null;
+    const index = selectedRegion.buildings.findIndex((building) => building.stage === selectedBuild.stage);
+    return buildStatuses[index] ?? null;
+  }, [buildStatuses, selectedBuild, selectedRegion]);
+
+  const selectedBuildCosts = useMemo(() => {
+    if (!game || !selectedBuild) return [];
+    return Object.entries(selectedBuild.cost).map(([item, required]) => {
+      const id = item as ItemId;
+      const needed = required ?? 0;
+      const owned = game.resources[id];
+      return {
+        id,
+        name: itemNames[id],
+        needed,
+        owned,
+        missing: Math.max(0, needed - owned),
+      };
+    });
+  }, [game, selectedBuild]);
+
+  useEffect(() => {
+    if (modal !== "build" || !game || !selectedRegion) return;
+    const next = selectedRegion.buildings.find((building) => building.stage === game.builtStage + 1);
+    setSelectedBuildStage((current) => {
+      if (current && selectedRegion.buildings.some((building) => building.stage === current)) return current;
+      return next?.stage ?? selectedRegion.buildings[0]?.stage ?? null;
+    });
+  }, [game, modal, selectedRegion]);
+
   if (!game || !selectedRegion) {
     return (
       <main className="game-shell">
@@ -623,20 +660,42 @@ export default function App() {
 
       {modal === "build" && (
         <Modal title="건설하기" onClose={() => setModal(null)} wide>
+          <div className="build-toolbar">
+            <div>
+              <strong>{selectedBuild ? selectedBuild.name : "건물 선택"}</strong>
+              {selectedBuild ? (
+                <div className="build-cost-row">
+                  {selectedBuildCosts.map((cost) => (
+                    <span className={cost.missing > 0 ? "build-cost missing" : "build-cost ready"} key={cost.id}>
+                      {cost.name} {cost.owned}/{cost.needed}
+                      {cost.missing > 0 && <em> -{cost.missing}</em>}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <span>건설할 건물을 선택하세요.</span>
+              )}
+            </div>
+            <button className="game-button" disabled={!selectedBuild || selectedBuildStatus !== "건설 가능"} onClick={() => selectedBuild && beginBuild(selectedBuild)}>
+              <Home size={18} /> 건설
+            </button>
+          </div>
           <div className="build-grid">
             {selectedRegion.buildings.map((building, index) => (
-              <article className="build-card" key={building.stage}>
-                <img src={`/assets/buildings/${building.asset}.webp`} alt="" />
-                <div>
-                  <strong>{building.stage}. {building.name}</strong>
-                  <span className={`status status-${buildStatuses[index].replace(" ", "-")}`}>{buildStatuses[index]}</span>
+              <button
+                className={`build-card ${buildStatuses[index] === "건설 가능" ? "available" : "locked"} ${selectedBuildStage === building.stage ? "selected" : ""}`}
+                key={building.stage}
+                onClick={() => setSelectedBuildStage(building.stage)}
+                type="button"
+              >
+                <div className="build-card-image">
+                  <img src={`/assets/buildings/${building.asset}.webp`} alt="" />
                 </div>
-                <p>{building.effect}</p>
-                <small>{formatCost(building.cost)}</small>
-                <button className="small-button" disabled={buildStatuses[index] !== "건설 가능"} onClick={() => beginBuild(building)}>
-                  <Home size={16} /> 건설
-                </button>
-              </article>
+                <div className="build-card-body">
+                  <strong>{building.stage}. {building.name}</strong>
+                  <p>{building.effect}</p>
+                </div>
+              </button>
             ))}
           </div>
         </Modal>
