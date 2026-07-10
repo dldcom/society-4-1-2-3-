@@ -30,6 +30,59 @@ const emptyResources = () =>
 const canPay = (resources: Record<ItemId, number>, cost: Partial<Record<ItemId, number>>) =>
   Object.entries(cost).every(([item, amount]) => resources[item as ItemId] >= (amount ?? 0));
 
+const TRADE_MIN_AMOUNT = 2;
+const TRADE_STEP = 2;
+const TRADE_MAX_AMOUNT = 10;
+const AUTO_PRODUCTION_SECONDS = 15;
+const MAX_WORKERS = 4;
+const WORKER_BASE_COST = 6;
+const WORKER_COST_STEP = 4;
+const BUILD_STATUS_READY = "건설 가능";
+const BUILD_STATUS_DONE = "완성";
+const BUILD_STATUS_LOCKED = "잠김";
+const BUILD_STATUS_MISSING = "자원 부족";
+const NORMAL_BUILDING_MAX_COPIES: Record<number, number> = {
+  1: 3,
+  2: 2,
+  3: 1,
+  4: 1,
+  5: 1,
+  6: 1,
+};
+
+const maxTradeAmount = (game: GameState, regionId: RegionId) =>
+  Math.min(TRADE_MAX_AMOUNT, Math.floor(game.resources[regions[regionId].resource] / TRADE_STEP) * TRADE_STEP);
+
+const workerRecruitCost = (workers: number) => WORKER_BASE_COST + Math.max(0, workers - 1) * WORKER_COST_STEP;
+
+const autoProductionAmount = (game: GameState) =>
+  1 + Math.floor(Math.max(0, game.workers - 1) / 2) + game.autoBonus;
+
+const normalBuildings = (game: GameState) =>
+  game.buildings.filter((building) => !isFeatureBuilding(building.spec));
+
+const placedStageCount = (game: GameState, stage: number) =>
+  normalBuildings(game).filter((building) => !isFeatureBuilding(building.spec) && building.spec.stage === stage).length;
+
+const normalBuildingLimit = (stage: number) => NORMAL_BUILDING_MAX_COPIES[stage] ?? 1;
+
+const isNormalBuildingUnlocked = (game: GameState, building: BuildingSpec) =>
+  building.stage === 1 || placedStageCount(game, building.stage - 1) > 0;
+
+const scaledNormalBuildingCost = (game: GameState, building: BuildingSpec) => {
+  const copyNumber = placedStageCount(game, building.stage) + 1;
+  const multiplier = building.stage <= 2 ? copyNumber : 1;
+  return Object.fromEntries(
+    Object.entries(building.cost).map(([item, amount]) => [item, (amount ?? 0) * multiplier]),
+  ) as Partial<Record<ItemId, number>>;
+};
+
+const canBuildNormalBuilding = (game: GameState, building: BuildingSpec) => {
+  if (!isNormalBuildingUnlocked(game, building)) return false;
+  if (placedStageCount(game, building.stage) >= normalBuildingLimit(building.stage)) return false;
+  return canPay(game.resources, scaledNormalBuildingCost(game, building));
+};
+
 const payCost = (resources: Record<ItemId, number>, cost: Partial<Record<ItemId, number>>) => {
   const next = { ...resources };
   Object.entries(cost).forEach(([item, amount]) => {
@@ -77,7 +130,9 @@ const applyCraftDiscount = (
 
 const makeInitialState = (regionId: RegionId): GameState => {
   const resources = emptyResources();
-  resources[regions[regionId].resource] = 3;
+  (["grain", "seafood", "wood", "minerals"] as ItemId[]).forEach((item) => {
+    resources[item] = 50;
+  });
   return {
     selectedRegion: regionId,
     resources,
@@ -162,7 +217,7 @@ export default function App() {
   const [selectedMainBuilding, setSelectedMainBuilding] = useState(false);
   const [notice, setNotice] = useState("플레이할 지역을 고르세요.");
   const [command, setCommand] = useState<SceneCommand>();
-  const [productionLeft, setProductionLeft] = useState(10);
+  const [productionLeft, setProductionLeft] = useState(AUTO_PRODUCTION_SECONDS);
   const [tradeMerchant, setTradeMerchant] = useState<string | null>(null);
   const [tradeTarget, setTradeTarget] = useState<RegionId | null>(null);
   const [tradeAmount, setTradeAmount] = useState(2);
@@ -216,7 +271,7 @@ export default function App() {
         setGame((current) => {
           if (!current?.selectedRegion || current.success) return current;
           const region = regions[current.selectedRegion];
-          const amount = current.workers + current.autoBonus;
+          const amount = autoProductionAmount(current);
           const resources = { ...current.resources };
           let bonus = 0;
           resources[region.resource] += amount;
@@ -232,7 +287,7 @@ export default function App() {
           pushCommand({ type: "floatText", text: message });
           return { ...current, resources, development: current.development + 1 };
         });
-        return 10;
+        return AUTO_PRODUCTION_SECONDS;
       });
     }, 1000);
     return () => window.clearInterval(timer);
@@ -332,12 +387,23 @@ export default function App() {
       });
       return;
     }
+    if (event.type === "companionFoundResource") {
+      setGame((current) => {
+        if (!current?.selectedRegion || current.isVisit) return current;
+        const resources = { ...current.resources };
+        resources[event.resource] += 1;
+        const companionName = companionSpecs[current.selectedRegion].name;
+        setNotice(`${companionName}가 ${resourceNames[event.resource]} 1개를 찾았어요.`);
+        return { ...current, resources };
+      });
+      return;
+    }
     if (event.type === "placeBuilding") {
       setGame((current) => {
         if (!current || !current.selectedRegion) return current;
         if (isFeatureBuilding(event.building)) {
-          if (current.builtStage < 4) {
-            setNotice("상품 건물은 4단계 건물을 지은 뒤 만들 수 있어요.");
+          if (current.builtStage < 6) {
+            setNotice("상품 건물은 최종 건물을 완성한 뒤 만들 수 있어요.");
             return current;
           }
           if (current.featureBuildings.includes(event.building.id)) {
@@ -368,11 +434,11 @@ export default function App() {
             development: current.development + 5,
           };
         }
-        if (event.building.stage !== current.builtStage + 1) return current;
-        if (!canPay(current.resources, event.building.cost)) {
+        if (!canBuildNormalBuilding(current, event.building)) {
           setNotice("자원이 부족합니다.");
           return current;
         }
+        const cost = scaledNormalBuildingCost(current, event.building);
         const placed: PlacedBuilding = {
           id: `building-${Date.now()}`,
           spec: event.building,
@@ -381,14 +447,14 @@ export default function App() {
           hasMerchant: false,
           productionBoosted: false,
         };
-        const resources = payCost(current.resources, event.building.cost);
+        const resources = payCost(current.resources, cost);
         const success = event.building.stage === 6;
         setNotice(success ? "최종 건물 완성!" : `${event.building.name} 완성!`);
         setModal(null);
         return {
           ...current,
           resources,
-          builtStage: event.building.stage,
+          builtStage: Math.max(current.builtStage, event.building.stage),
           buildings: [...current.buildings, placed],
           development: current.development + event.building.stage * 4,
           success,
@@ -406,8 +472,8 @@ export default function App() {
   const beginBuild = (building: VillageBuildingSpec) => {
     if (!game) return;
     if (isFeatureBuilding(building)) {
-      if (game.builtStage < 4) {
-        setNotice("상품 건물은 4단계 건물을 지은 뒤 만들 수 있어요.");
+      if (game.builtStage < 6) {
+        setNotice("상품 건물은 최종 건물을 완성한 뒤 만들 수 있어요.");
         return;
       }
       if (game.featureBuildings.includes(building.id)) {
@@ -423,11 +489,15 @@ export default function App() {
       pushCommand({ type: "startPlacement", building });
       return;
     }
-    if (building.stage !== game.builtStage + 1) {
+    if (!isNormalBuildingUnlocked(game, building)) {
       setNotice("이전 건물부터 지어야 합니다.");
       return;
     }
-    if (!canPay(game.resources, building.cost)) {
+    if (placedStageCount(game, building.stage) >= normalBuildingLimit(building.stage)) {
+      setNotice("이 건물은 더 지을 수 없습니다.");
+      return;
+    }
+    if (!canPay(game.resources, scaledNormalBuildingCost(game, building))) {
       setNotice("자원이 부족합니다.");
       return;
     }
@@ -459,13 +529,19 @@ export default function App() {
   };
 
   const recruitWorker = () => {
-    if (!game || game.resources.grain < 5) {
+    if (!game) return;
+    if (game.workers >= MAX_WORKERS) {
+      setNotice("일꾼은 4명까지 함께할 수 있어요.");
+      return;
+    }
+    const cost = workerRecruitCost(game.workers);
+    if (game.resources.grain < cost) {
       setNotice("곡식이 부족합니다.");
       return;
     }
     setGame({
       ...game,
-      resources: { ...game.resources, grain: game.resources.grain - 5 },
+      resources: { ...game.resources, grain: game.resources.grain - cost },
       workers: game.workers + 1,
       development: game.development + 2,
     });
@@ -526,7 +602,8 @@ export default function App() {
     if (!game || !selectedRegion || !tradeMerchant || !tradeTarget) return;
     const merchant = game.merchants.find((item) => item.id === tradeMerchant);
     if (!merchant || merchant.status !== "idle") return;
-    if (game.resources[selectedRegion.resource] < tradeAmount) {
+    const limit = maxTradeAmount(game, selectedRegion.id);
+    if (tradeAmount < TRADE_MIN_AMOUNT || tradeAmount > limit) {
       setNotice("보낼 자원이 부족합니다.");
       return;
     }
@@ -615,9 +692,8 @@ export default function App() {
   const openProductTrade = () => {
     if (!game || !selectedRegion) return;
     const firstTargetRegion = regionList.find((region) => region.id !== game.selectedRegion);
-    const firstOwnedProduct = selectedRegion.products.find((product) => game.resources[product] > 0) ?? selectedRegion.product;
     const firstReceiveProduct = firstTargetRegion?.product ?? null;
-    setSendProductId(firstOwnedProduct);
+    setSendProductId(selectedRegion.product);
     setProductTradeTarget(firstTargetRegion?.id ?? null);
     setReceiveProductId(firstReceiveProduct);
     setModal("productTrade");
@@ -639,9 +715,9 @@ export default function App() {
   const buildStatuses = useMemo(() => {
     if (!game || !selectedRegion) return [];
     return selectedRegion.buildings.map((building) => {
-      if (building.stage <= game.builtStage) return "완성";
-      if (building.stage > game.builtStage + 1) return "잠김";
-      return canPay(game.resources, building.cost) ? "건설 가능" : "자원 부족";
+      if (placedStageCount(game, building.stage) >= normalBuildingLimit(building.stage)) return BUILD_STATUS_DONE;
+      if (!isNormalBuildingUnlocked(game, building)) return BUILD_STATUS_LOCKED;
+      return canPay(game.resources, scaledNormalBuildingCost(game, building)) ? BUILD_STATUS_READY : BUILD_STATUS_MISSING;
     });
   }, [game, selectedRegion]);
 
@@ -658,7 +734,7 @@ export default function App() {
 
   const selectedBuildCosts = useMemo(() => {
     if (!game || !selectedBuild) return [];
-    return Object.entries(selectedBuild.cost).map(([item, required]) => {
+    return Object.entries(scaledNormalBuildingCost(game, selectedBuild)).map(([item, required]) => {
       const id = item as ItemId;
       const needed = required ?? 0;
       const owned = game.resources[id];
@@ -693,7 +769,17 @@ export default function App() {
   const idleMerchants = game.merchants.filter((merchant) => merchant.status === "idle");
   const activeTradeMerchant = game.merchants.find((merchant) => merchant.id === tradeMerchant && merchant.status === "idle");
   const otherRegions = regionList.filter((region) => region.id !== game.selectedRegion);
-  const targetProductChoices = productTradeTarget ? regions[productTradeTarget].products : [];
+  const tradeLimit = maxTradeAmount(game, selectedRegion.id);
+  const canSendTrade = Boolean(activeTradeMerchant && tradeTarget && tradeLimit >= TRADE_MIN_AMOUNT && tradeAmount <= tradeLimit);
+  const craftProductChoices = [selectedRegion.product];
+  const sendProductChoices = [selectedRegion.product];
+  const targetProductChoices = productTradeTarget ? [regions[productTradeTarget].product] : [];
+  const nextWorkerCost = workerRecruitCost(game.workers);
+  const canRecruitWorker = game.workers < MAX_WORKERS && game.resources.grain >= nextWorkerCost;
+  const unlockedFeatureBuildings =
+    game.builtStage >= 6
+      ? featureBuildingsByRegion[selectedRegion.id].filter((building) => building.product === selectedRegion.product)
+      : [];
 
   return (
     <main className={modal === "routes" ? "game-shell route-mode" : "game-shell"}>
@@ -739,8 +825,8 @@ export default function App() {
           <strong>마을 본부</strong>
           <span>{selectedRegion.name} · 중심 건물</span>
           <p>일꾼을 뽑고 상인을 보내는 곳</p>
-          <button className="small-button" onClick={recruitWorker} disabled={game.resources.grain < 5}>
-            일꾼 뽑기 · 곡식 5
+          <button className="small-button" onClick={recruitWorker} disabled={!canRecruitWorker}>
+            {game.workers >= MAX_WORKERS ? "일꾼 가득" : `일꾼 뽑기 · 곡식 ${nextWorkerCost}`}
           </button>
         </aside>
       )}
@@ -804,14 +890,14 @@ export default function App() {
                 <span>건설할 건물을 선택하세요.</span>
               )}
             </div>
-            <button className="game-button" disabled={!selectedBuild || selectedBuildStatus !== "건설 가능"} onClick={() => selectedBuild && beginBuild(selectedBuild)}>
+            <button className="game-button" disabled={!selectedBuild || selectedBuildStatus !== BUILD_STATUS_READY} onClick={() => selectedBuild && beginBuild(selectedBuild)}>
               <Home size={18} /> 건설
             </button>
           </div>
           <div className="build-grid">
             {selectedRegion.buildings.map((building, index) => (
               <button
-                className={`build-card ${buildStatuses[index] === "건설 가능" ? "available" : "locked"} ${selectedBuildStage === building.stage ? "selected" : ""}`}
+                className={`build-card ${buildStatuses[index] === BUILD_STATUS_READY ? "available" : "locked"} ${selectedBuildStage === building.stage ? "selected" : ""}`}
                 key={building.stage}
                 onClick={() => setSelectedBuildStage(building.stage)}
                 type="button"
@@ -822,19 +908,22 @@ export default function App() {
                 <div className="build-card-body">
                   <strong>{building.stage}. {building.name}</strong>
                   <p>{building.effect}</p>
+                  <span className="status">
+                    {placedStageCount(game, building.stage)}/{normalBuildingLimit(building.stage)} · {buildStatuses[index]}
+                  </span>
                 </div>
               </button>
             ))}
           </div>
-          <section className="feature-build-section">
+          {unlockedFeatureBuildings.length > 0 && <section className="feature-build-section">
             <header>
               <strong>상품 건물</strong>
               <span>상품 1개로 지어요. 효과는 간단하게 생산, 제작, 교류를 도와줍니다.</span>
             </header>
             <div className="build-grid">
-              {featureBuildingsByRegion[selectedRegion.id].map((building) => {
+              {unlockedFeatureBuildings.map((building) => {
                 const built = game.featureBuildings.includes(building.id);
-                const locked = game.builtStage < 4;
+                const locked = game.builtStage < 6;
                 const ready = !built && !locked && canPay(game.resources, building.cost);
                 return (
                   <button
@@ -856,7 +945,7 @@ export default function App() {
                 );
               })}
             </div>
-          </section>
+          </section>}
         </Modal>
       )}
 
@@ -891,12 +980,12 @@ export default function App() {
           <section className="trade-section">
             <strong>보낼 수량</strong>
             <div className="stepper">
-              <button onClick={() => setTradeAmount(Math.max(2, tradeAmount - 2))}>-</button>
+              <button onClick={() => setTradeAmount(Math.max(TRADE_MIN_AMOUNT, tradeAmount - TRADE_STEP))}>-</button>
               <span>{resourceNames[selectedRegion.resource]} {tradeAmount}개 → {tradeTarget ? resourceNames[regions[tradeTarget].resource] : "자원"} {tradeAmount / 2}개</span>
-              <button onClick={() => setTradeAmount(tradeAmount + 2)}>+</button>
+              <button disabled={tradeAmount >= tradeLimit} onClick={() => setTradeAmount(Math.min(tradeLimit, tradeAmount + TRADE_STEP))}>+</button>
             </div>
           </section>
-          <button className="game-button full" disabled={!activeTradeMerchant || !tradeTarget || idleMerchants.length === 0} onClick={sendTrade}>
+          <button className="game-button full" disabled={!canSendTrade || idleMerchants.length === 0} onClick={sendTrade}>
             <Send size={20} /> 보내기
           </button>
         </Modal>
@@ -925,7 +1014,7 @@ export default function App() {
             <p>대표상품은 다른 지역 자원이 조금씩 필요합니다. 만든 상품은 이웃 지역 상품과 바꾸거나 최종 건물 재료로 씁니다.</p>
           </section>
           <div className="product-grid">
-            {selectedRegion.products.map((productId) => {
+            {craftProductChoices.map((productId) => {
               const product = productSpecs[productId];
               const recipe = applyCraftDiscount(product.recipe, game, selectedRegion.id);
               const ready = canPay(game.resources, recipe);
@@ -960,7 +1049,7 @@ export default function App() {
           <section className="trade-section">
             <strong>보낼 상품</strong>
             <div className="product-grid compact">
-              {selectedRegion.products.map((productId) => (
+              {sendProductChoices.map((productId) => (
                 <button
                   className={sendProductId === productId ? "product-card selected" : "product-card"}
                   disabled={game.resources[productId] < 1}
@@ -987,7 +1076,7 @@ export default function App() {
                     setReceiveProductId(region.product);
                   }}
                 >
-                  {region.shortName} · 상품 4종
+                  {region.shortName} · {productNames[region.product]}
                 </button>
               ))}
             </div>
@@ -1113,7 +1202,7 @@ function Hud({ game, productionLeft }: { game: GameState; productionLeft: number
   const region = regions[game.selectedRegion!];
   const resourceItems: ItemId[] = ["grain", "seafood", "wood", "minerals"];
   productIds.forEach((item) => {
-    if (region.products.includes(item) || game.resources[item] > 0) resourceItems.push(item);
+    if (item === region.product || game.resources[item] > 0) resourceItems.push(item);
   });
   return (
     <section className="hud">

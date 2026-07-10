@@ -20,6 +20,9 @@ const WORKER_SCALE = 0.96;
 const PLAY_ZOOM = 1.28;
 const MERCHANT_SPEED = 230;
 const WORKER_SPEED = 260;
+const ANIMAL_SPEED = 115;
+const ANIMAL_RESOURCE_CHANCE = 0.22;
+const ANIMAL_RESOURCE_DISTANCE = 135;
 const MAIN_BUILDING: [number, number] = [WORLD_W / 2, WORLD_H / 2];
 const MAIN_FRONT: [number, number] = [WORLD_W / 2, WORLD_H / 2 + 118];
 const RESOURCE_SPOTS: Record<RegionId, Array<[number, number]>> = {
@@ -107,6 +110,9 @@ const animalScales: Record<RegionId, number> = {
   mine: 0.64,
   coast: 0.68,
 };
+
+const animalDirectionalScale = (regionId: RegionId, direction: Direction) =>
+  regionId === "rural" && (direction === "up" || direction === "down") ? animalScales[regionId] * 0.88 : animalScales[regionId];
 
 export class VillageScene extends Phaser.Scene {
   private emitToReact: EmitEvent;
@@ -523,26 +529,102 @@ export class VillageScene extends Phaser.Scene {
     }
     if (!this.animals.some((animal) => this.isSpriteAlive(animal))) {
       this.animals = [];
-      this.addCompanion(regionId, 1000, 900);
+      const spawn = this.getCompanionSpawnPoint();
+      this.addCompanion(regionId, spawn[0], spawn[1]);
       return;
     }
+    this.animals.forEach((animal) => {
+      if (this.isSpriteAlive(animal) && !animal.getData("wandering")) this.wanderCompanion(animal, regionId);
+    });
   }
 
   private addCompanion(regionId: RegionId, x: number, y: number) {
     const companion = this.add.sprite(x, y, animalTextureKey(regionId), 0).setScale(animalScales[regionId]).setDepth(95);
     companion.setData("regionId", regionId);
-    this.safelyPlay(companion, animalAnimationKey(regionId, "right"));
+    companion.setData("wandering", false);
+    this.safelyPlay(companion, animalAnimationKey(regionId, "down"));
     this.animals.push(companion);
-    this.tweens.add({
-      targets: companion,
-      x: x + 70,
-      yoyo: true,
-      repeat: -1,
-      duration: 2200,
-      ease: "Sine.easeInOut",
-      onYoyo: () => this.safelyPlay(companion, animalAnimationKey(regionId, "left")),
-      onRepeat: () => this.safelyPlay(companion, animalAnimationKey(regionId, "right")),
-    });
+    this.time.delayedCall(450, () => this.wanderCompanion(companion, regionId));
+  }
+
+  private getCompanionSpawnPoint(): [number, number] {
+    const storage = this.state?.buildings.find((building) => !this.isFeatureBuilding(building.spec) && building.spec.stage === 2);
+    if (!storage) return MAIN_FRONT;
+    return this.offsetFromBuilding(storage.x, storage.y, 0, 78);
+  }
+
+  private getCompanionDestinations(): Array<[number, number]> {
+    const buildingDestinations =
+      this.state?.buildings.flatMap((building, index) => {
+        const side = index % 2 === 0 ? -1 : 1;
+        return [
+          this.offsetFromBuilding(building.x, building.y, side * 76, 82),
+          this.offsetFromBuilding(building.x, building.y, -side * 58, 26),
+        ];
+      }) ?? [];
+    return [MAIN_FRONT, ...buildingDestinations];
+  }
+
+  private offsetFromBuilding(x: number, y: number, dx: number, dy: number): [number, number] {
+    return [Phaser.Math.Clamp(x + dx, 120, WORLD_W - 120), Phaser.Math.Clamp(y + dy, 120, WORLD_H - 120)];
+  }
+
+  private pickCompanionDestination(sprite: Phaser.GameObjects.Sprite): [number, number] {
+    const destinations = this.getCompanionDestinations().filter(
+      ([x, y]) => Phaser.Math.Distance.Between(sprite.x, sprite.y, x, y) > 48,
+    );
+    if (!destinations.length) return MAIN_FRONT;
+    return Phaser.Utils.Array.GetRandom(destinations);
+  }
+
+  private isResourceBuilding(spec: VillageBuildingSpec): spec is BuildingSpec {
+    return !this.isFeatureBuilding(spec) && (spec.stage === 1 || spec.stage === 2);
+  }
+
+  private isNearResourceBuilding(sprite: Phaser.GameObjects.Sprite) {
+    return Boolean(
+      this.state?.buildings.some(
+        (building) =>
+          this.isResourceBuilding(building.spec) &&
+          Phaser.Math.Distance.Between(sprite.x, sprite.y, building.x, building.y) <= ANIMAL_RESOURCE_DISTANCE,
+      ),
+    );
+  }
+
+  private maybeCompanionFindsResource(sprite: Phaser.GameObjects.Sprite, regionId: RegionId) {
+    if (this.state?.isVisit || !this.isNearResourceBuilding(sprite) || Math.random() > ANIMAL_RESOURCE_CHANCE) return;
+    this.companionSpeechBubble(sprite, "찾았다 +1");
+    this.emitToReact({ type: "companionFoundResource", resource: regions[regionId].resource });
+  }
+
+  private wanderCompanion(sprite: Phaser.GameObjects.Sprite, regionId: RegionId) {
+    if (!this.isSpriteAlive(sprite) || sprite.getData("regionId") !== regionId || sprite.getData("wandering")) return;
+    sprite.setData("wandering", true);
+    const target = this.pickCompanionDestination(sprite);
+    this.moveSpriteOrthogonally(
+      sprite,
+      [target],
+      ANIMAL_SPEED,
+      (from, to) => {
+        const direction = this.directionFromDelta(to[0] - from[0], to[1] - from[1]);
+        sprite.setDepth(90 + sprite.y / 20);
+        sprite.setScale(animalDirectionalScale(regionId, direction));
+        this.safelyPlay(sprite, animalAnimationKey(regionId, direction));
+      },
+      () => {
+        if (!this.isSpriteAlive(sprite)) return;
+        sprite.setDepth(90 + sprite.y / 20);
+        sprite.stop();
+        sprite.setTexture(animalTextureKey(regionId)).setFrame(0).setScale(animalDirectionalScale(regionId, "down"));
+        this.maybeCompanionFindsResource(sprite, regionId);
+        const pauseMs = Phaser.Math.Between(1200, 3200);
+        this.time.delayedCall(pauseMs, () => {
+          if (!this.isSpriteAlive(sprite)) return;
+          sprite.setData("wandering", false);
+          this.wanderCompanion(sprite, regionId);
+        });
+      },
+    );
   }
 
   private startPlacement(building: VillageBuildingSpec) {
@@ -965,6 +1047,46 @@ export class VillageScene extends Phaser.Scene {
       alpha: 0,
       duration: 1200,
       onComplete: () => label.destroy(),
+    });
+  }
+
+  private companionSpeechBubble(sprite: Phaser.GameObjects.Sprite, text: string) {
+    if (!this.isSpriteAlive(sprite)) return;
+    const paddingX = 14;
+    const paddingY = 8;
+    const label = this.add
+      .text(0, 0, text, {
+        fontFamily: "Arial",
+        fontSize: "20px",
+        color: "#3f2a17",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setDepth(302);
+    const width = label.width + paddingX * 2;
+    const height = label.height + paddingY * 2;
+    const x = sprite.x;
+    const y = sprite.y - 58;
+    const bubble = this.add.graphics().setDepth(301);
+    bubble.fillStyle(0xfff7db, 0.96);
+    bubble.lineStyle(3, 0x6a4524, 0.95);
+    bubble.fillRoundedRect(x - width / 2, y - height / 2, width, height, 10);
+    bubble.strokeRoundedRect(x - width / 2, y - height / 2, width, height, 10);
+    bubble.fillTriangle(x - 8, y + height / 2 - 1, x + 8, y + height / 2 - 1, x, y + height / 2 + 12);
+    bubble.strokeTriangle(x - 8, y + height / 2 - 1, x + 8, y + height / 2 - 1, x, y + height / 2 + 12);
+    label.setPosition(x, y);
+    const targets = [bubble, label];
+    this.tweens.add({
+      targets,
+      y: "-=18",
+      alpha: 0,
+      delay: 850,
+      duration: 550,
+      ease: "Sine.easeInOut",
+      onComplete: () => {
+        bubble.destroy();
+        label.destroy();
+      },
     });
   }
 }

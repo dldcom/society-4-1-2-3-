@@ -516,7 +516,7 @@ export const regions: Record<RegionId, RegionSpec> = {
     product: "mineIronOreBox",
     products: productsByRegion.mine,
     productName: productNames.mineIronOreBox,
-    bg: "/assets/factory-region-v1.webp",
+    bg: "/assets/mine-region-v2.png",
     point: "#607d8b",
     intro: "광물과 도구가 나오는 마을",
     recipe: { minerals: 2, grain: 1, wood: 1, seafood: 1 },

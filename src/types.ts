@@ -76,6 +76,7 @@ export type SceneEvent =
   | { type: "selectMainBuilding" }
   | { type: "merchantReturned"; merchantId: string }
   | { type: "productWagonReturned"; target: RegionId; product: ProductId }
+  | { type: "companionFoundResource"; resource: ResourceId }
   | { type: "editPoint"; x: number; y: number }
   | { type: "moveBuildZoneRect"; zoneIndex: number; rect: BuildZoneRect }
   | { type: "notice"; message: string };
