@@ -6,15 +6,21 @@ import {
   allItems,
   buildingAssetPath,
   companionSpecs,
+  featureBuildingsByRegion,
   itemNames,
   mainBuildingAssetPath,
+  productIds,
   productNames,
+  productSpecs,
   regionList,
   regions,
   resourceNames,
   type BuildingSpec,
+  type FeatureBuildingSpec,
   type ItemId,
+  type ProductId,
   type RegionId,
+  type VillageBuildingSpec,
 } from "./gameData";
 import type { GameState, Merchant, PlacedBuilding, RouteTuning, SceneCommand, SceneEvent } from "./types";
 
@@ -47,11 +53,31 @@ const formatCost = (cost: Partial<Record<ItemId, number>>) =>
     .map(([item, amount]) => `${itemNames[item as ItemId]} ${amount}`)
     .join(", ");
 
+const isFeatureBuilding = (building: VillageBuildingSpec): building is FeatureBuildingSpec =>
+  "effectKind" in building;
+
+const hasFeatureEffect = (game: GameState, kind: FeatureBuildingSpec["effectKind"]) =>
+  game.selectedRegion
+    ? featureBuildingsByRegion[game.selectedRegion].some(
+        (building) => building.effectKind === kind && game.featureBuildings.includes(building.id),
+      )
+    : false;
+
+const applyCraftDiscount = (
+  recipe: Partial<Record<ItemId, number>>,
+  game: GameState,
+  regionId: RegionId,
+) => {
+  if (!hasFeatureEffect(game, "craft")) return recipe;
+  const resource = regions[regionId].resource;
+  const amount = recipe[resource] ?? 0;
+  if (amount <= 0) return recipe;
+  return { ...recipe, [resource]: Math.max(0, amount - 1) };
+};
+
 const makeInitialState = (regionId: RegionId): GameState => {
   const resources = emptyResources();
-  allItems.forEach((item) => {
-    resources[item] = 100;
-  });
+  resources[regions[regionId].resource] = 3;
   return {
     selectedRegion: regionId,
     resources,
@@ -60,6 +86,7 @@ const makeInitialState = (regionId: RegionId): GameState => {
     development: 0,
     autoBonus: 0,
     builtStage: 0,
+    featureBuildings: [],
     buildings: [],
     companions: emptyCompanions(),
     hasDog: false,
@@ -68,7 +95,7 @@ const makeInitialState = (regionId: RegionId): GameState => {
   };
 };
 
-type Modal = "build" | "trade" | "visit" | "productTrade" | "routes" | null;
+type Modal = "build" | "trade" | "visit" | "craftProduct" | "productTrade" | "routes" | null;
 
 const emptyTuning = (): RouteTuning => ({ workerSpots: {}, merchantRoutes: {}, buildZones: {} });
 
@@ -97,6 +124,7 @@ const makeVisitState = (base: GameState, regionId: RegionId): GameState => {
       hasMerchant: spec.stage === 1,
       productionBoosted: spec.stage >= 5,
     })),
+    featureBuildings: base.featureBuildings ?? [],
     merchants: Array.from({ length: Math.max(base.merchants.length, builtStage >= 1 ? 1 : 0) }, (_, index) => ({
       id: `visit-merchant-${regionId}-${index}`,
       name: `상인${index + 1}`,
@@ -140,7 +168,10 @@ export default function App() {
   const [tradeAmount, setTradeAmount] = useState(2);
   const [visitRegion, setVisitRegion] = useState<RegionId | null>(null);
   const [sceneBusy, setSceneBusy] = useState(false);
+  const [craftProductId, setCraftProductId] = useState<ProductId | null>(null);
+  const [sendProductId, setSendProductId] = useState<ProductId | null>(null);
   const [productTradeTarget, setProductTradeTarget] = useState<RegionId | null>(null);
+  const [receiveProductId, setReceiveProductId] = useState<ProductId | null>(null);
   const [selectedBuildStage, setSelectedBuildStage] = useState<number | null>(null);
   const gameRef = useRef<GameState | null>(null);
   const editModeRef = useRef<typeof editMode>(null);
@@ -289,13 +320,14 @@ export default function App() {
         if (!current) return current;
         const resources = { ...current.resources };
         resources[event.product] += 1;
+        const bonusDevelopment = hasFeatureEffect(current, "trade") ? 2 : 0;
         setNotice(`${regions[event.target].name}에서 ${productNames[event.product]}을 가져왔어요.`);
         pushCommand({ type: "floatText", text: `+1 ${productNames[event.product]}` });
         return {
           ...current,
           resources,
           stats: { ...current.stats, productTrades: current.stats.productTrades + 1 },
-          development: current.development + 5,
+          development: current.development + 5 + bonusDevelopment,
         };
       });
       return;
@@ -303,6 +335,39 @@ export default function App() {
     if (event.type === "placeBuilding") {
       setGame((current) => {
         if (!current || !current.selectedRegion) return current;
+        if (isFeatureBuilding(event.building)) {
+          if (current.builtStage < 4) {
+            setNotice("상품 건물은 4단계 건물을 지은 뒤 만들 수 있어요.");
+            return current;
+          }
+          if (current.featureBuildings.includes(event.building.id)) {
+            setNotice("이미 지은 상품 건물입니다.");
+            return current;
+          }
+          if (!canPay(current.resources, event.building.cost)) {
+            setNotice("상품이 부족합니다.");
+            return current;
+          }
+          const placed: PlacedBuilding = {
+            id: `feature-${event.building.id}`,
+            spec: event.building,
+            x: event.x,
+            y: event.y,
+            hasMerchant: false,
+            productionBoosted: false,
+          };
+          const resources = payCost(current.resources, event.building.cost);
+          setNotice(`${event.building.name} 완성! ${event.building.effect}`);
+          setModal(null);
+          return {
+            ...current,
+            resources,
+            autoBonus: event.building.effectKind === "production" ? current.autoBonus + 1 : current.autoBonus,
+            featureBuildings: [...current.featureBuildings, event.building.id],
+            buildings: [...current.buildings, placed],
+            development: current.development + 5,
+          };
+        }
         if (event.building.stage !== current.builtStage + 1) return current;
         if (!canPay(current.resources, event.building.cost)) {
           setNotice("자원이 부족합니다.");
@@ -338,8 +403,26 @@ export default function App() {
     setNotice(`${regions[regionId].name}을 선택했어요. 자원을 모아 발전시켜 보세요.`);
   };
 
-  const beginBuild = (building: BuildingSpec) => {
+  const beginBuild = (building: VillageBuildingSpec) => {
     if (!game) return;
+    if (isFeatureBuilding(building)) {
+      if (game.builtStage < 4) {
+        setNotice("상품 건물은 4단계 건물을 지은 뒤 만들 수 있어요.");
+        return;
+      }
+      if (game.featureBuildings.includes(building.id)) {
+        setNotice("이미 지은 상품 건물입니다.");
+        return;
+      }
+      if (!canPay(game.resources, building.cost)) {
+        setNotice("상품이 부족합니다.");
+        return;
+      }
+      setNotice(`${building.name}을 지을 곳을 고르세요.`);
+      setModal(null);
+      pushCommand({ type: "startPlacement", building });
+      return;
+    }
     if (building.stage !== game.builtStage + 1) {
       setNotice("이전 건물부터 지어야 합니다.");
       return;
@@ -354,7 +437,7 @@ export default function App() {
   };
 
   const recruitMerchant = () => {
-    if (!game || !selectedBuilding || selectedBuilding.spec.stage !== 1 || selectedBuilding.hasMerchant) return;
+    if (!game || !selectedBuilding || isFeatureBuilding(selectedBuilding.spec) || selectedBuilding.spec.stage !== 1 || selectedBuilding.hasMerchant) return;
     const merchant: Merchant = {
       id: `merchant-${Date.now()}`,
       name: `상인${game.merchants.length + 1}`,
@@ -389,22 +472,29 @@ export default function App() {
     setNotice("일꾼을 뽑았어요.");
   };
 
-  const craftProduct = () => {
+  const openCraftProduct = () => {
+    if (!selectedRegion) return;
+    setCraftProductId(selectedRegion.product);
+    setModal("craftProduct");
+  };
+
+  const craftProduct = (productId: ProductId) => {
     if (!game || !selectedRegion) return;
-    const cost = { ...selectedRegion.recipe };
+    const product = productSpecs[productId];
+    const cost = applyCraftDiscount({ ...product.recipe }, game, selectedRegion.id);
     if (!canPay(game.resources, cost)) {
       setNotice("자원이 부족합니다.");
       return;
     }
     const resources = payCost(game.resources, cost);
-    resources[selectedRegion.product] += 1;
+    resources[productId] += 1;
     setGame({
       ...game,
       resources,
       stats: { ...game.stats, crafts: game.stats.crafts + 1 },
       development: game.development + 4,
     });
-    setNotice(`${productNames[selectedRegion.product]}을 만들었어요.`);
+    setNotice(`${product.name}을 만들었어요.`);
   };
 
   const boostProduction = () => {
@@ -523,22 +613,27 @@ export default function App() {
   };
 
   const openProductTrade = () => {
-    const firstTargetRegion = regionList.find((region) => region.id !== game?.selectedRegion);
+    if (!game || !selectedRegion) return;
+    const firstTargetRegion = regionList.find((region) => region.id !== game.selectedRegion);
+    const firstOwnedProduct = selectedRegion.products.find((product) => game.resources[product] > 0) ?? selectedRegion.product;
+    const firstReceiveProduct = firstTargetRegion?.product ?? null;
+    setSendProductId(firstOwnedProduct);
     setProductTradeTarget(firstTargetRegion?.id ?? null);
+    setReceiveProductId(firstReceiveProduct);
     setModal("productTrade");
   };
 
   const sendProductTrade = () => {
-    if (!game || !selectedRegion || !productTradeTarget) return;
-    if (game.resources[selectedRegion.product] < 1) {
-      setNotice(`${productNames[selectedRegion.product]}이 부족합니다.`);
+    if (!game || !selectedRegion || !sendProductId || !productTradeTarget || !receiveProductId) return;
+    if (game.resources[sendProductId] < 1) {
+      setNotice(`${productNames[sendProductId]}이 부족합니다.`);
       return;
     }
-    const resources = { ...game.resources, [selectedRegion.product]: game.resources[selectedRegion.product] - 1 };
+    const resources = { ...game.resources, [sendProductId]: game.resources[sendProductId] - 1 };
     setGame({ ...game, resources });
-    setNotice(`${productNames[selectedRegion.product]}을 싣고 ${regions[productTradeTarget].name}으로 출발했어요.`);
+    setNotice(`${productNames[sendProductId]}을 싣고 ${regions[productTradeTarget].name}으로 출발했어요.`);
     setModal(null);
-    pushCommand({ type: "productWagonTravel", target: productTradeTarget });
+    pushCommand({ type: "productWagonTravel", target: productTradeTarget, product: receiveProductId });
   };
 
   const buildStatuses = useMemo(() => {
@@ -598,6 +693,7 @@ export default function App() {
   const idleMerchants = game.merchants.filter((merchant) => merchant.status === "idle");
   const activeTradeMerchant = game.merchants.find((merchant) => merchant.id === tradeMerchant && merchant.status === "idle");
   const otherRegions = regionList.filter((region) => region.id !== game.selectedRegion);
+  const targetProductChoices = productTradeTarget ? regions[productTradeTarget].products : [];
 
   return (
     <main className={modal === "routes" ? "game-shell route-mode" : "game-shell"}>
@@ -654,30 +750,39 @@ export default function App() {
           <button className="close-button" onClick={() => setSelectedBuildingId(null)} title="닫기">
             <X size={18} />
           </button>
-          <img src={buildingAssetPath(selectedRegion.id, selectedBuilding.spec.asset)} alt="" />
+          <img src={isFeatureBuilding(selectedBuilding.spec) ? selectedBuilding.spec.asset : buildingAssetPath(selectedRegion.id, selectedBuilding.spec.asset)} alt="" />
           <strong>{selectedBuilding.spec.name}</strong>
-          <span>{selectedRegion.name} · {selectedBuilding.spec.stage}단계</span>
-          <p>{selectedBuilding.spec.role} · {selectedBuilding.spec.effect}</p>
-          {selectedBuilding.spec.stage === 1 && (
+          {isFeatureBuilding(selectedBuilding.spec) ? (
+            <>
+              <span>{selectedRegion.name} · 상품 건물</span>
+              <p>{productNames[selectedBuilding.spec.product]} · {selectedBuilding.spec.effect}</p>
+            </>
+          ) : (
+            <>
+              <span>{selectedRegion.name} · {selectedBuilding.spec.stage}단계</span>
+              <p>{selectedBuilding.spec.role} · {selectedBuilding.spec.effect}</p>
+            </>
+          )}
+          {!isFeatureBuilding(selectedBuilding.spec) && selectedBuilding.spec.stage === 1 && (
             <button className="small-button" onClick={recruitMerchant} disabled={selectedBuilding.hasMerchant}>
               상인 뽑기
             </button>
           )}
-          {selectedBuilding.spec.stage === 2 && game.selectedRegion && (
+          {!isFeatureBuilding(selectedBuilding.spec) && selectedBuilding.spec.stage === 2 && game.selectedRegion && (
             <button className="small-button" onClick={adoptCompanion} disabled={hasRegionCompanion(game, game.selectedRegion)}>
               {companionSpecs[game.selectedRegion].action}
             </button>
           )}
-          {selectedBuilding.spec.stage === 3 && (
+          {!isFeatureBuilding(selectedBuilding.spec) && selectedBuilding.spec.stage === 3 && (
             <button className="small-button" onClick={openVisit}>이웃 마을 구경하기</button>
           )}
-          {selectedBuilding.spec.stage === 4 && (
-            <button className="small-button" onClick={craftProduct}>{productNames[selectedRegion.product]} 만들기</button>
+          {!isFeatureBuilding(selectedBuilding.spec) && selectedBuilding.spec.stage === 4 && (
+            <button className="small-button" onClick={openCraftProduct}>상품 만들기</button>
           )}
-          {selectedBuilding.spec.stage === 5 && (
+          {!isFeatureBuilding(selectedBuilding.spec) && selectedBuilding.spec.stage === 5 && (
             <button className="small-button" onClick={openProductTrade}>상품 보내기</button>
           )}
-          {selectedBuilding.spec.stage === 6 && <button className="small-button">완성 확인</button>}
+          {!isFeatureBuilding(selectedBuilding.spec) && selectedBuilding.spec.stage === 6 && <button className="small-button">완성 확인</button>}
         </aside>
       )}
 
@@ -721,6 +826,37 @@ export default function App() {
               </button>
             ))}
           </div>
+          <section className="feature-build-section">
+            <header>
+              <strong>상품 건물</strong>
+              <span>상품 1개로 지어요. 효과는 간단하게 생산, 제작, 교류를 도와줍니다.</span>
+            </header>
+            <div className="build-grid">
+              {featureBuildingsByRegion[selectedRegion.id].map((building) => {
+                const built = game.featureBuildings.includes(building.id);
+                const locked = game.builtStage < 4;
+                const ready = !built && !locked && canPay(game.resources, building.cost);
+                return (
+                  <button
+                    className={`build-card ${ready ? "available" : "locked"}`}
+                    disabled={built || locked}
+                    key={building.id}
+                    onClick={() => beginBuild(building)}
+                    type="button"
+                  >
+                    <div className="build-card-image">
+                      <img src={building.asset} alt="" />
+                    </div>
+                    <div className="build-card-body">
+                      <strong>{building.name}</strong>
+                      <p>{productNames[building.product]} 필요 · {building.effect}</p>
+                      <span className="status">{built ? "완성" : locked ? "4단계 뒤 해금" : ready ? "건설 가능" : "상품 부족"}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
         </Modal>
       )}
 
@@ -782,23 +918,98 @@ export default function App() {
         </Modal>
       )}
 
+      {modal === "craftProduct" && (
+        <Modal title="상품 만들기" onClose={() => setModal(null)} wide>
+          <section className="trade-section">
+            <strong>{selectedRegion.shortName}에서 만들 상품</strong>
+            <p>대표상품은 다른 지역 자원이 조금씩 필요합니다. 만든 상품은 이웃 지역 상품과 바꾸거나 최종 건물 재료로 씁니다.</p>
+          </section>
+          <div className="product-grid">
+            {selectedRegion.products.map((productId) => {
+              const product = productSpecs[productId];
+              const recipe = applyCraftDiscount(product.recipe, game, selectedRegion.id);
+              const ready = canPay(game.resources, recipe);
+              return (
+                <button
+                  className={craftProductId === productId ? "product-card selected" : "product-card"}
+                  key={productId}
+                  onClick={() => setCraftProductId(productId)}
+                  type="button"
+                >
+                  <img src={product.asset} alt="" />
+                  <strong>{product.name}</strong>
+                  <span>보유 {game.resources[productId]}개</span>
+                  <small>{product.use}</small>
+                  <em className={ready ? "ready" : "missing"}>{formatCost(recipe)}</em>
+                </button>
+              );
+            })}
+          </div>
+          <button
+            className="game-button full"
+            disabled={!craftProductId || !canPay(game.resources, applyCraftDiscount(productSpecs[craftProductId].recipe, game, selectedRegion.id))}
+            onClick={() => craftProductId && craftProduct(craftProductId)}
+          >
+            <PackagePlus size={20} /> {craftProductId ? productNames[craftProductId] : "상품"} 만들기
+          </button>
+        </Modal>
+      )}
+
       {modal === "productTrade" && (
         <Modal title="상품 보내기" onClose={() => setModal(null)}>
           <section className="trade-section">
             <strong>보낼 상품</strong>
-            <p>{productNames[selectedRegion.product]} 1개를 보내고, 이웃 지역 대표 상품 1개를 받아와요.</p>
+            <div className="product-grid compact">
+              {selectedRegion.products.map((productId) => (
+                <button
+                  className={sendProductId === productId ? "product-card selected" : "product-card"}
+                  disabled={game.resources[productId] < 1}
+                  key={productId}
+                  onClick={() => setSendProductId(productId)}
+                  type="button"
+                >
+                  <img src={productSpecs[productId].asset} alt="" />
+                  <strong>{productNames[productId]}</strong>
+                  <span>보유 {game.resources[productId]}개</span>
+                </button>
+              ))}
+            </div>
           </section>
           <section className="trade-section">
             <strong>대상 지역</strong>
             <div className="choice-row">
               {otherRegions.map((region) => (
-                <button key={region.id} className={productTradeTarget === region.id ? "choice selected" : "choice"} onClick={() => setProductTradeTarget(region.id)}>
-                  {region.shortName} · {productNames[region.product]}
+                <button
+                  key={region.id}
+                  className={productTradeTarget === region.id ? "choice selected" : "choice"}
+                  onClick={() => {
+                    setProductTradeTarget(region.id);
+                    setReceiveProductId(region.product);
+                  }}
+                >
+                  {region.shortName} · 상품 4종
                 </button>
               ))}
             </div>
           </section>
-          <button className="game-button full" disabled={!productTradeTarget || game.resources[selectedRegion.product] < 1} onClick={sendProductTrade}>
+          <section className="trade-section">
+            <strong>받을 상품</strong>
+            <div className="product-grid compact">
+              {targetProductChoices.map((productId) => (
+                <button
+                  className={receiveProductId === productId ? "product-card selected" : "product-card"}
+                  key={productId}
+                  onClick={() => setReceiveProductId(productId)}
+                  type="button"
+                >
+                  <img src={productSpecs[productId].asset} alt="" />
+                  <strong>{productNames[productId]}</strong>
+                  <small>{productSpecs[productId].use}</small>
+                </button>
+              ))}
+            </div>
+          </section>
+          <button className="game-button full" disabled={!sendProductId || !receiveProductId || !productTradeTarget || game.resources[sendProductId] < 1} onClick={sendProductTrade}>
             <Send size={20} /> 상품 보내기
           </button>
         </Modal>
@@ -901,8 +1112,8 @@ function StartScreen({ onSelect }: { onSelect: (regionId: RegionId) => void }) {
 function Hud({ game, productionLeft }: { game: GameState; productionLeft: number }) {
   const region = regions[game.selectedRegion!];
   const resourceItems: ItemId[] = ["grain", "seafood", "wood", "minerals"];
-  (["plentyBundle", "forestBox", "toolBox", "seaGiftBox"] as ItemId[]).forEach((item) => {
-    if (item === region.product || game.resources[item] > 0) resourceItems.push(item);
+  productIds.forEach((item) => {
+    if (region.products.includes(item) || game.resources[item] > 0) resourceItems.push(item);
   });
   return (
     <section className="hud">

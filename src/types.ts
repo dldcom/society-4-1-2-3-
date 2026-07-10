@@ -1,8 +1,8 @@
-import type { BuildingSpec, ItemId, ProductId, RegionId, ResourceId } from "./gameData";
+import type { ItemId, ProductId, RegionId, ResourceId, VillageBuildingSpec } from "./gameData";
 
 export type PlacedBuilding = {
   id: string;
-  spec: BuildingSpec;
+  spec: VillageBuildingSpec;
   x: number;
   y: number;
   hasMerchant: boolean;
@@ -35,6 +35,7 @@ export type GameState = {
   development: number;
   autoBonus: number;
   builtStage: number;
+  featureBuildings: string[];
   buildings: PlacedBuilding[];
   companions?: Partial<Record<RegionId, boolean>>;
   hasDog: boolean;
@@ -62,15 +63,15 @@ export type SceneCommand =
   | { type: "setTuning"; tuning: RouteTuning }
   | { type: "setEditMode"; mode: "worker" | "merchant" | "buildZone" | null; target?: RegionId }
   | { type: "setMapView"; mode: "play" | "overview" }
-  | { type: "startPlacement"; building: BuildingSpec }
+  | { type: "startPlacement"; building: VillageBuildingSpec }
   | { type: "cancelPlacement" }
   | { type: "merchantEnter"; merchantId: string; x: number; y: number }
   | { type: "merchantTravel"; merchantId: string; target: RegionId }
-  | { type: "productWagonTravel"; target: RegionId }
+  | { type: "productWagonTravel"; target: RegionId; product: ProductId }
   | { type: "floatText"; text: string; x?: number; y?: number };
 
 export type SceneEvent =
-  | { type: "placeBuilding"; building: BuildingSpec; x: number; y: number }
+  | { type: "placeBuilding"; building: VillageBuildingSpec; x: number; y: number }
   | { type: "selectBuilding"; buildingId: string }
   | { type: "selectMainBuilding" }
   | { type: "merchantReturned"; merchantId: string }

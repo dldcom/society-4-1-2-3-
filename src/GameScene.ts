@@ -1,5 +1,16 @@
 import Phaser from "phaser";
-import { buildingAssetIds, buildingAssetPath, mainBuildingAssetPath, regions, type BuildingSpec, type RegionId } from "./gameData";
+import {
+  buildingAssetIds,
+  buildingAssetPath,
+  featureBuildingsByRegion,
+  mainBuildingAssetPath,
+  regions,
+  type BuildingSpec,
+  type FeatureBuildingSpec,
+  type ProductId,
+  type RegionId,
+  type VillageBuildingSpec,
+} from "./gameData";
 import type { BuildZoneRect, GameState, RouteTuning, SceneCommand, SceneEvent } from "./types";
 
 const WORLD_W = 2400;
@@ -43,6 +54,7 @@ type CharacterSpriteKind = "workerWalk" | "workerHarvest" | "merchantWalk" | "me
 type Direction = "down" | "left" | "right" | "up";
 
 const buildingTextureKey = (regionId: RegionId, asset: BuildingSpec["asset"]) => `building-${regionId}-${asset}`;
+const featureBuildingTextureKey = (id: string) => `feature-building-${id}`;
 const mainBuildingTextureKey = (regionId: RegionId) => `building-${regionId}-main`;
 const characterTextureKey = (regionId: RegionId, kind: CharacterSpriteKind) => `character-${regionId}-${kind}`;
 const animalTextureKey = (regionId: RegionId) => `animal-${regionId}`;
@@ -107,7 +119,7 @@ export class VillageScene extends Phaser.Scene {
   private workers: Phaser.GameObjects.Sprite[] = [];
   private merchants = new Map<string, Phaser.GameObjects.Sprite>();
   private animals: Phaser.GameObjects.Sprite[] = [];
-  private placement?: BuildingSpec;
+  private placement?: VillageBuildingSpec;
   private preview?: Phaser.GameObjects.Image;
   private initialRegion: RegionId;
   private tuning: RouteTuning = { workerSpots: {}, merchantRoutes: {}, buildZones: {} };
@@ -131,6 +143,9 @@ export class VillageScene extends Phaser.Scene {
     Object.values(regions).forEach((region) => {
       buildingAssetIds.forEach((asset) => {
         this.load.image(buildingTextureKey(region.id, asset), buildingAssetPath(region.id, asset));
+      });
+      featureBuildingsByRegion[region.id].forEach((building) => {
+        this.load.image(featureBuildingTextureKey(building.id), building.asset);
       });
       this.load.image(mainBuildingTextureKey(region.id), mainBuildingAssetPath(region.id));
     });
@@ -219,7 +234,7 @@ export class VillageScene extends Phaser.Scene {
       return;
     }
     if (command.type === "productWagonTravel") {
-      this.animateProductWagon(command.target);
+      this.animateProductWagon(command.target, command.product);
       return;
     }
     if (command.type === "floatText") {
@@ -251,7 +266,7 @@ export class VillageScene extends Phaser.Scene {
       let sprite = this.buildings.get(building.id);
       if (!sprite) {
         sprite = this.add
-          .image(building.x, building.y, buildingTextureKey(region.id, building.spec.asset))
+          .image(building.x, building.y, this.textureForBuilding(region.id, building.spec))
           .setDisplaySize(160, 160)
           .setInteractive({ useHandCursor: true })
           .setDepth(20 + building.y / 10);
@@ -276,7 +291,7 @@ export class VillageScene extends Phaser.Scene {
           .setDepth(70);
         this.labels.set(building.id, label);
       }
-      sprite.setTexture(buildingTextureKey(region.id, building.spec.asset));
+      sprite.setTexture(this.textureForBuilding(region.id, building.spec));
       sprite.setPosition(building.x, building.y).setDepth(20 + building.y / 10);
       this.labels.get(building.id)?.setPosition(building.x, building.y + 88);
     });
@@ -338,6 +353,14 @@ export class VillageScene extends Phaser.Scene {
         .setDepth(70);
     }
     this.mainBuilding.setTexture(mainBuildingTextureKey(regionId));
+  }
+
+  private isFeatureBuilding(spec: VillageBuildingSpec): spec is FeatureBuildingSpec {
+    return "effectKind" in spec;
+  }
+
+  private textureForBuilding(regionId: RegionId, spec: VillageBuildingSpec) {
+    return this.isFeatureBuilding(spec) ? featureBuildingTextureKey(spec.id) : buildingTextureKey(regionId, spec.asset);
   }
 
   private createAnimations() {
@@ -522,12 +545,12 @@ export class VillageScene extends Phaser.Scene {
     });
   }
 
-  private startPlacement(building: BuildingSpec) {
+  private startPlacement(building: VillageBuildingSpec) {
     this.placement = building;
     this.preview?.destroy();
     const regionId = this.state?.selectedRegion ?? this.initialRegion;
     this.preview = this.add
-      .image(WORLD_W / 2, WORLD_H / 2, buildingTextureKey(regionId, building.asset))
+      .image(WORLD_W / 2, WORLD_H / 2, this.textureForBuilding(regionId, building))
       .setDisplaySize(168, 168)
       .setAlpha(0.65)
       .setDepth(200);
@@ -701,7 +724,7 @@ export class VillageScene extends Phaser.Scene {
     );
   }
 
-  private animateProductWagon(target: RegionId) {
+  private animateProductWagon(target: RegionId, product: ProductId) {
     const regionId = this.currentRegion();
     const targetPoints: Record<RegionId, [number, number]> = {
       mountain: [330, 240],
@@ -730,7 +753,6 @@ export class VillageScene extends Phaser.Scene {
             (from, to) => this.safelyPlay(sprite, characterAnimationKey(regionId, "product-wagon", this.directionFromDelta(to[0] - from[0], to[1] - from[1]))),
             () => {
               this.destroySprite(sprite);
-              const product = regions[target].product;
               this.emitToReact({ type: "productWagonReturned", target, product });
             },
           );
