@@ -81,6 +81,7 @@ button {
 .start-panel,
 .modal,
 .hud,
+.mission-guide,
 .building-panel,
 .notice-board,
 .action-bar,
@@ -230,6 +231,85 @@ h1 {
   background-color: var(--paper-deep);
 }
 
+.primary-resources .resource-badge {
+  padding: 6px 9px;
+  font-size: 15px;
+}
+
+.resource-badge.home-resource {
+  border-color: var(--gold-dark);
+  outline: 2px solid rgba(227, 169, 46, 0.55);
+  background-color: #ffe8a3;
+}
+
+.product-mini-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.product-mini-badge {
+  border: 2px solid #7c5128;
+  border-radius: 999px;
+  padding: 3px 7px;
+  background-color: var(--paper-light);
+  background-image: var(--paper-fill);
+  color: var(--ink);
+  box-shadow: inset 0 1px 0 rgba(255, 248, 218, 0.72), inset 0 -1px 0 rgba(92, 51, 20, 0.12);
+}
+
+.mission-guide {
+  position: absolute;
+  z-index: 6;
+  top: 142px;
+  left: 14px;
+  width: min(360px, calc(100vw - 28px));
+  padding: 10px 12px;
+}
+
+.mission-guide-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.mission-guide .eyebrow {
+  margin-bottom: 0;
+  font-size: 13px;
+}
+
+.mission-guide > strong {
+  display: block;
+  font-size: 19px;
+  margin-bottom: 3px;
+}
+
+.mission-guide p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1.35;
+}
+
+.mission-badge {
+  flex: 0 0 auto;
+  border: 2px solid var(--gold-dark);
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #ffe08a;
+  color: #4b2b12;
+  font-size: 12px;
+  font-weight: 900;
+}
+
 .notice-board {
   position: absolute;
   z-index: 6;
@@ -359,6 +439,39 @@ h1 {
 
 .game-button.full {
   width: 100%;
+}
+
+.game-button.mission-pulse {
+  position: relative;
+  isolation: isolate;
+  animation: mission-button-pulse 1.05s ease-in-out infinite;
+}
+
+.game-button.mission-pulse::after {
+  content: "여기!";
+  position: absolute;
+  top: -24px;
+  right: -10px;
+  z-index: 1;
+  border: 2px solid var(--gold-dark);
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: #ffe08a;
+  color: #3a210d;
+  font-size: 12px;
+  font-weight: 900;
+  box-shadow: 0 2px 0 rgba(55, 30, 13, 0.34);
+}
+
+@keyframes mission-button-pulse {
+  0%, 100% {
+    filter: brightness(1);
+    transform: translateY(0);
+  }
+  50% {
+    filter: brightness(1.18);
+    transform: translateY(-2px);
+  }
 }
 
 .round-button,
@@ -993,6 +1106,22 @@ h1 {
     left: 8px;
     width: calc(100vw - 16px);
     padding: 9px;
+  }
+
+  .mission-guide {
+    top: auto;
+    left: 8px;
+    bottom: 150px;
+    width: min(360px, calc(100vw - 16px));
+    padding: 9px 10px;
+  }
+
+  .mission-guide > strong {
+    font-size: 17px;
+  }
+
+  .mission-guide p {
+    font-size: 13px;
   }
 
   .resource-badge,

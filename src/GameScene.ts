@@ -122,6 +122,9 @@ export class VillageScene extends Phaser.Scene {
   private mainBuildingLabel?: Phaser.GameObjects.Text;
   private buildings = new Map<string, Phaser.GameObjects.Image>();
   private labels = new Map<string, Phaser.GameObjects.Text>();
+  private missionHalo?: Phaser.GameObjects.Ellipse;
+  private missionText?: Phaser.GameObjects.Text;
+  private missionTargetId?: string;
   private workers: Phaser.GameObjects.Sprite[] = [];
   private merchants = new Map<string, Phaser.GameObjects.Sprite>();
   private animals: Phaser.GameObjects.Sprite[] = [];
@@ -302,6 +305,7 @@ export class VillageScene extends Phaser.Scene {
       this.labels.get(building.id)?.setPosition(building.x, building.y + 88);
     });
 
+    this.renderMissionMarker();
     this.renderWorkers();
     this.renderMerchants();
     this.renderAnimals();
@@ -359,6 +363,114 @@ export class VillageScene extends Phaser.Scene {
         .setDepth(70);
     }
     this.mainBuilding.setTexture(mainBuildingTextureKey(regionId));
+  }
+
+  private renderMissionMarker() {
+    const target = this.getMissionTargetBuilding();
+    if (!target) {
+      this.clearMissionMarker();
+      return;
+    }
+
+    if (!this.missionHalo) {
+      this.missionHalo = this.add
+        .ellipse(target.x, target.y + 4, 188, 132)
+        .setStrokeStyle(7, 0xffd45a, 0.95)
+        .setDepth(108);
+      this.tweens.add({
+        targets: this.missionHalo,
+        scaleX: 1.08,
+        scaleY: 1.08,
+        alpha: 0.55,
+        duration: 620,
+        yoyo: true,
+        repeat: -1,
+        ease: "Sine.easeInOut",
+      });
+    }
+
+    if (!this.missionText) {
+      this.missionText = this.add
+        .text(target.x, target.y - 112, "여기!", {
+          fontFamily: "Arial",
+          fontSize: "28px",
+          color: "#3a210d",
+          backgroundColor: "#ffe08a",
+          padding: { x: 12, y: 6 },
+        })
+        .setOrigin(0.5)
+        .setDepth(112);
+      this.tweens.add({
+        targets: this.missionText,
+        y: target.y - 124,
+        duration: 560,
+        yoyo: true,
+        repeat: -1,
+        ease: "Sine.easeInOut",
+      });
+    }
+
+    if (this.missionTargetId !== target.id) {
+      this.tweens.killTweensOf(this.missionText);
+      this.missionText.setY(target.y - 112);
+      this.tweens.add({
+        targets: this.missionText,
+        y: target.y - 124,
+        duration: 560,
+        yoyo: true,
+        repeat: -1,
+        ease: "Sine.easeInOut",
+      });
+    }
+
+    this.missionTargetId = target.id;
+    this.missionHalo.setPosition(target.x, target.y + 4).setVisible(true);
+    this.missionText.setPosition(target.x, this.missionText.y).setVisible(true);
+  }
+
+  private clearMissionMarker() {
+    if (this.missionHalo) {
+      this.tweens.killTweensOf(this.missionHalo);
+      this.missionHalo.destroy();
+      this.missionHalo = undefined;
+    }
+    if (this.missionText) {
+      this.tweens.killTweensOf(this.missionText);
+      this.missionText.destroy();
+      this.missionText = undefined;
+    }
+    this.missionTargetId = undefined;
+  }
+
+  private getMissionTargetBuilding(): PlacedBuilding | undefined {
+    if (!this.state || this.state.isVisit || this.state.success) return undefined;
+    const regionId = this.state.selectedRegion;
+    if (!regionId) return undefined;
+
+    if (this.state.builtStage >= 1 && this.state.merchants.length === 0) {
+      return this.findStageBuilding(1);
+    }
+    if (this.state.builtStage >= 2 && !this.hasRegionCompanion(regionId)) {
+      return this.findStageBuilding(2);
+    }
+    if (this.state.builtStage === 3) {
+      return this.findStageBuilding(3);
+    }
+    if (this.state.builtStage >= 4 && this.state.stats.crafts < 1) {
+      return this.findStageBuilding(4);
+    }
+    if (this.state.builtStage >= 5 && this.state.stats.productTrades < 1) {
+      return this.findStageBuilding(5);
+    }
+    return undefined;
+  }
+
+  private findStageBuilding(stage: number): PlacedBuilding | undefined {
+    return this.state?.buildings.find((building) => !this.isFeatureBuilding(building.spec) && building.spec.stage === stage);
+  }
+
+  private hasRegionCompanion(regionId: RegionId) {
+    return Boolean(this.state?.companions?.[regionId] || (regionId === "rural" && this.state?.hasDog));
   }
 
   private isFeatureBuilding(spec: VillageBuildingSpec): spec is FeatureBuildingSpec {

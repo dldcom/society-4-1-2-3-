@@ -128,6 +128,157 @@ const applyCraftDiscount = (
   return { ...recipe, [resource]: Math.max(0, amount - 1) };
 };
 
+type MissionStep = {
+  id: string;
+  title: string;
+  detail: string;
+  progress: string;
+};
+
+const getCurrentMission = (game: GameState): MissionStep | null => {
+  if (!game.selectedRegion) return null;
+  const region = regions[game.selectedRegion];
+  const firstBuilding = region.buildings[0];
+  const secondBuilding = region.buildings[1];
+  const thirdBuilding = region.buildings[2];
+  const fourthBuilding = region.buildings[3];
+  const fifthBuilding = region.buildings[4];
+  const finalBuilding = region.buildings[5];
+
+  const hasMerchant = game.merchants.length > 0;
+  const hasCompanion = hasRegionCompanion(game, game.selectedRegion);
+  const hasAnyOwnProduct = region.products.some((product) => game.resources[product] > 0);
+  const hasAnyProductBuilding = game.featureBuildings.length > 0;
+  const hasAnyOtherProduct = productIds.some(
+    (product) => !region.products.includes(product) && game.resources[product] > 0,
+  );
+  const classroomSuccess = game.stats.trades >= 1 && game.stats.crafts >= 1;
+
+  if (game.builtStage < 1) {
+    return {
+      id: "build-stage-1",
+      title: `${firstBuilding.name} 짓기`,
+      detail: `${resourceNames[region.resource]} ${firstBuilding.cost[region.resource] ?? 3}개를 모아 첫 건물을 지으세요.`,
+      progress: "1/10",
+    };
+  }
+
+  if (!hasMerchant) {
+    return {
+      id: "recruit-merchant",
+      title: "상인 뽑기",
+      detail: `1단계 건물(${firstBuilding.name})을 눌러 상인을 뽑으세요.`,
+      progress: "2/10",
+    };
+  }
+
+  if (game.stats.trades < 1) {
+    return {
+      id: "trade-resource",
+      title: "부족한 자원 교류하기",
+      detail: "교류하기를 눌러 다른 지역 자원을 받아오세요.",
+      progress: "3/10",
+    };
+  }
+
+  if (game.builtStage < 2) {
+    return {
+      id: "build-stage-2",
+      title: `${secondBuilding.name} 짓기`,
+      detail: "자원을 더 모아 2단계 건물을 지으세요.",
+      progress: "4/10",
+    };
+  }
+
+  if (!hasCompanion) {
+    return {
+      id: "adopt-companion",
+      title: companionSpecs[game.selectedRegion].action,
+      detail: `2단계 건물을 눌러 ${companionSpecs[game.selectedRegion].name}을 만나세요.`,
+      progress: "5/10",
+    };
+  }
+
+  if (game.builtStage < 3) {
+    return {
+      id: "build-stage-3",
+      title: `${thirdBuilding.name} 짓기`,
+      detail: "3단계 건물을 지으면 이웃 마을을 구경할 수 있어요.",
+      progress: "6/10",
+    };
+  }
+
+  if (game.builtStage < 4) {
+    return {
+      id: "build-stage-4",
+      title: `${fourthBuilding.name} 짓기`,
+      detail: "이웃 마을을 구경해 보고, 4단계 건물을 지어 대표 상품 만들기를 여세요.",
+      progress: "7/10",
+    };
+  }
+
+  if (!hasAnyOwnProduct && game.stats.crafts < 1) {
+    return {
+      id: "craft-product",
+      title: `${region.productName} 만들기`,
+      detail: `4단계 건물(${fourthBuilding.name})을 눌러 ${region.shortName} 대표 상품을 만드세요.`,
+      progress: "8/10",
+    };
+  }
+
+  if (!hasAnyProductBuilding) {
+    return {
+      id: "feature-building",
+      title: "상품 건물 1개 짓기",
+      detail: "만든 상품 1개로 생산·제작·교류를 도와주는 건물을 지어보세요.",
+      progress: "9/10",
+    };
+  }
+
+  if (game.builtStage < 5) {
+    return {
+      id: "build-stage-5",
+      title: `${fifthBuilding.name} 짓기`,
+      detail: "5단계 건물을 지으면 상품을 다른 지역으로 보낼 수 있어요.",
+      progress: "10/10",
+    };
+  }
+
+  if (game.stats.productTrades < 1 && !hasAnyOtherProduct) {
+    return {
+      id: "trade-product",
+      title: "상품 보내기",
+      detail: "5단계 건물을 눌러 다른 지역 상품과 바꿔보세요.",
+      progress: "보너스",
+    };
+  }
+
+  if (!classroomSuccess) {
+    return {
+      id: "classroom-success",
+      title: "수업 성공 조건 달성하기",
+      detail: "교류 1번 + 상품 1개 만들기를 해내면 수업 목표 성공입니다.",
+      progress: "목표",
+    };
+  }
+
+  if (!game.success) {
+    return {
+      id: "final-building",
+      title: `${finalBuilding.name} 완성하기`,
+      detail: "더 도전하고 싶다면 최종 건물을 완성하세요.",
+      progress: "도전",
+    };
+  }
+
+  return {
+    id: "complete",
+    title: "마을 발전 완료!",
+    detail: "지역마다 필요한 자원이 달라서 교류가 중요하다는 것을 확인했어요.",
+    progress: "완료",
+  };
+};
+
 const makeInitialState = (regionId: RegionId): GameState => {
   const resources = emptyResources();
   (["grain", "seafood", "wood", "minerals"] as ItemId[]).forEach((item) => {
@@ -780,6 +931,9 @@ export default function App() {
     game.builtStage >= 6
       ? featureBuildingsByRegion[selectedRegion.id].filter((building) => building.product === selectedRegion.product)
       : [];
+  const currentMission = getCurrentMission(game);
+  const pulseBuildButton = currentMission ? ["build-stage-1", "build-stage-2", "build-stage-3", "build-stage-4", "build-stage-5", "final-building", "feature-building"].includes(currentMission.id) : false;
+  const pulseTradeButton = currentMission?.id === "trade-resource";
 
   return (
     <main className={modal === "routes" ? "game-shell route-mode" : "game-shell"}>
@@ -787,12 +941,13 @@ export default function App() {
       {modal !== "routes" && (
         <>
           <Hud game={game} productionLeft={productionLeft} />
+          <MissionGuide game={game} />
           <div className="notice-board">{notice}</div>
           <div className="action-bar">
-            <button className="game-button" onClick={() => setModal("build")}>
+            <button className={pulseBuildButton ? "game-button mission-pulse" : "game-button"} onClick={() => setModal("build")}>
               <Hammer size={22} /> 건설하기
             </button>
-            <button className="game-button" onClick={openTrade}>
+            <button className={pulseTradeButton ? "game-button mission-pulse" : "game-button"} onClick={openTrade}>
               <HandCoins size={22} /> 교류하기
             </button>
             <button className="round-button" title="동선 편집" onClick={() => setModal("routes")}>
@@ -1201,25 +1356,50 @@ function StartScreen({ onSelect }: { onSelect: (regionId: RegionId) => void }) {
 function Hud({ game, productionLeft }: { game: GameState; productionLeft: number }) {
   const region = regions[game.selectedRegion!];
   const resourceItems: ItemId[] = ["grain", "seafood", "wood", "minerals"];
-  productIds.forEach((item) => {
-    if (item === region.product || game.resources[item] > 0) resourceItems.push(item);
-  });
+  const ownedProducts = productIds.filter((item) => game.resources[item] > 0);
+
   return (
     <section className="hud">
       <strong>{region.name}</strong>
-      <div className="resource-row">
+      <div className="resource-row primary-resources">
         {resourceItems.map((item) => (
-          <span className="resource-badge" key={item}>
+          <span className={item === region.resource ? "resource-badge home-resource" : "resource-badge"} key={item}>
             {itemNames[item]} {game.resources[item]}
           </span>
         ))}
       </div>
+      {ownedProducts.length > 0 && (
+        <div className="product-mini-row" aria-label="보유 상품">
+          <span>상품</span>
+          {ownedProducts.map((item) => (
+            <span className="product-mini-badge" key={item}>
+              {itemNames[item]} {game.resources[item]}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="mini-status">
         <span>일꾼 {game.workers}명</span>
         <span>상인 {game.merchants.filter((m) => m.status === "idle").length}/{game.merchants.length}명</span>
         <span>발전도 {game.development}</span>
         <span>자동 생산 {productionLeft}초</span>
       </div>
+    </section>
+  );
+}
+
+function MissionGuide({ game }: { game: GameState }) {
+  const mission = getCurrentMission(game);
+  if (!mission) return null;
+
+  return (
+    <section className="mission-guide" aria-label="다음 할 일">
+      <div className="mission-guide-header">
+        <span className="eyebrow">다음 할 일</span>
+        <span className="mission-badge">{mission.progress}</span>
+      </div>
+      <strong>{mission.title}</strong>
+      <p>{mission.detail}</p>
     </section>
   );
 }
