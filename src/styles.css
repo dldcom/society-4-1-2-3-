@@ -310,6 +310,58 @@ h1 {
   font-weight: 900;
 }
 
+.mission-dialog-backdrop {
+  position: absolute;
+  z-index: 25;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(35, 20, 10, 0.42);
+}
+
+.mission-dialog {
+  position: relative;
+  width: min(420px, calc(100vw - 36px));
+  padding: 26px 24px 22px;
+  text-align: center;
+  border: 8px solid transparent;
+  border-radius: 18px;
+  background-color: var(--paper);
+  background-image: var(--paper-frame);
+  background-origin: padding-box, padding-box, border-box;
+  box-shadow: 0 12px 0 rgba(49, 27, 12, 0.34);
+}
+
+.mission-dialog .eyebrow {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.mission-dialog .mission-badge {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+}
+
+.mission-dialog h2 {
+  margin: 0 32px 10px;
+  color: var(--ink);
+  font-size: 27px;
+}
+
+.mission-dialog p {
+  margin: 0 auto 20px;
+  max-width: 340px;
+  color: var(--ink-soft);
+  font-weight: 900;
+  line-height: 1.5;
+}
+
+.mission-dialog-confirm {
+  min-width: 132px;
+}
+
 .notice-board {
   position: absolute;
   z-index: 6;

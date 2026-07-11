@@ -119,11 +119,11 @@ export class VillageScene extends Phaser.Scene {
   private state?: GameState;
   private bg?: Phaser.GameObjects.Image;
   private mainBuilding?: Phaser.GameObjects.Image;
-  private mainBuildingLabel?: Phaser.GameObjects.Text;
+  private mainBuildingLabel?: Phaser.GameObjects.Container;
   private buildings = new Map<string, Phaser.GameObjects.Image>();
-  private labels = new Map<string, Phaser.GameObjects.Text>();
+  private labels = new Map<string, Phaser.GameObjects.Container>();
   private missionHalo?: Phaser.GameObjects.Ellipse;
-  private missionText?: Phaser.GameObjects.Text;
+  private missionBubble?: Phaser.GameObjects.Container;
   private missionTargetId?: string;
   private workers: Phaser.GameObjects.Sprite[] = [];
   private merchants = new Map<string, Phaser.GameObjects.Sprite>();
@@ -288,16 +288,7 @@ export class VillageScene extends Phaser.Scene {
           this.emitToReact({ type: "selectBuilding", buildingId: building.id });
         });
         this.buildings.set(building.id, sprite);
-        const label = this.add
-          .text(building.x, building.y + 88, building.spec.name, {
-            fontFamily: "Arial",
-            fontSize: "18px",
-            color: "#442510",
-            backgroundColor: "#fff1c8",
-            padding: { x: 8, y: 3 },
-          })
-          .setOrigin(0.5)
-          .setDepth(70);
+        const label = this.createBuildingLabel(building.spec.name, false).setPosition(building.x, building.y + 88);
         this.labels.set(building.id, label);
       }
       sprite.setTexture(this.textureForBuilding(region.id, building.spec));
@@ -340,6 +331,63 @@ export class VillageScene extends Phaser.Scene {
     }
   }
 
+  private createBuildingLabel(name: string, isMain: boolean) {
+    const text = this.add
+      .text(0, -1, name, {
+        fontFamily: '"Noto Sans KR", "Malgun Gothic", sans-serif',
+        fontSize: isMain ? "18px" : "17px",
+        fontStyle: "bold",
+        color: "#4a2c18",
+      })
+      .setOrigin(0.5);
+    const width = Math.max(isMain ? 112 : 94, text.width + 30);
+    const height = 34;
+    const shadow = this.add.graphics();
+    shadow.fillStyle(0x3b2112, 0.24);
+    shadow.fillRoundedRect(-width / 2 + 3, -height / 2 + 4, width, height, 8);
+    const board = this.add.graphics();
+    board.fillStyle(isMain ? 0xffe4a3 : 0xf7dfad, 0.98);
+    board.lineStyle(3, isMain ? 0x8a5424 : 0x795033, 1);
+    board.fillRoundedRect(-width / 2, -height / 2, width, height, 8);
+    board.strokeRoundedRect(-width / 2, -height / 2, width, height, 8);
+    board.lineStyle(1, 0xfff4d4, 0.72);
+    board.strokeRoundedRect(-width / 2 + 4, -height / 2 + 4, width - 8, height - 8, 5);
+    if (isMain) {
+      board.fillStyle(0xb97826, 1);
+      board.fillCircle(-width / 2 + 11, 0, 3);
+      board.fillCircle(width / 2 - 11, 0, 3);
+    }
+    return this.add.container(0, 0, [shadow, board, text]).setDepth(70);
+  }
+
+  private createMissionBubble() {
+    const text = this.add
+      .text(0, 0, "여기!", {
+        fontFamily: '"Noto Sans KR", "Malgun Gothic", sans-serif',
+        fontSize: "21px",
+        fontStyle: "bold",
+        color: "#4a2a14",
+      })
+      .setOrigin(0.5);
+    const width = 74;
+    const height = 38;
+    const shadow = this.add.graphics();
+    shadow.fillStyle(0x3b2112, 0.2);
+    shadow.fillRoundedRect(-width / 2 + 3, -height / 2 + 4, width, height, 11);
+    shadow.fillTriangle(-7 + 3, height / 2 + 2, 9 + 3, height / 2 + 2, 1 + 3, height / 2 + 14);
+    const bubble = this.add.graphics();
+    bubble.fillStyle(0xfff5d6, 0.99);
+    bubble.lineStyle(3, 0xc2872f, 1);
+    bubble.fillRoundedRect(-width / 2, -height / 2, width, height, 11);
+    bubble.strokeRoundedRect(-width / 2, -height / 2, width, height, 11);
+    bubble.fillStyle(0xfff5d6, 1);
+    bubble.fillTriangle(-7, height / 2 - 2, 9, height / 2 - 2, 0, height / 2 + 11);
+    bubble.lineStyle(3, 0xc2872f, 1);
+    bubble.lineBetween(-7, height / 2 - 1, 0, height / 2 + 11);
+    bubble.lineBetween(0, height / 2 + 11, 9, height / 2 - 1);
+    return this.add.container(0, 0, [shadow, bubble, text]).setDepth(112);
+  }
+
   private renderMainBuilding() {
     const regionId = this.state?.selectedRegion ?? this.initialRegion;
     if (!this.mainBuilding) {
@@ -351,16 +399,7 @@ export class VillageScene extends Phaser.Scene {
       this.mainBuilding.on("pointerup", () => {
         if (!this.pointerMoved) this.emitToReact({ type: "selectMainBuilding" });
       });
-      this.mainBuildingLabel = this.add
-        .text(MAIN_BUILDING[0], MAIN_BUILDING[1] + 105, "마을 본부", {
-          fontFamily: "Arial",
-          fontSize: "18px",
-          color: "#442510",
-          backgroundColor: "#fff1c8",
-          padding: { x: 8, y: 3 },
-        })
-        .setOrigin(0.5)
-        .setDepth(70);
+      this.mainBuildingLabel = this.createBuildingLabel("마을 본부", true).setPosition(MAIN_BUILDING[0], MAIN_BUILDING[1] + 105);
     }
     this.mainBuilding.setTexture(mainBuildingTextureKey(regionId));
   }
@@ -374,36 +413,29 @@ export class VillageScene extends Phaser.Scene {
 
     if (!this.missionHalo) {
       this.missionHalo = this.add
-        .ellipse(target.x, target.y + 4, 188, 132)
-        .setStrokeStyle(7, 0xffd45a, 0.95)
+        .ellipse(target.x, target.y + 4, 184, 128)
+        .setStrokeStyle(4, 0xf3bd3d, 0.78)
         .setDepth(108);
       this.tweens.add({
         targets: this.missionHalo,
-        scaleX: 1.08,
-        scaleY: 1.08,
-        alpha: 0.55,
-        duration: 620,
+        scaleX: 1.06,
+        scaleY: 1.06,
+        alpha: 0.38,
+        duration: 760,
         yoyo: true,
         repeat: -1,
         ease: "Sine.easeInOut",
       });
     }
 
-    if (!this.missionText) {
-      this.missionText = this.add
-        .text(target.x, target.y - 112, "여기!", {
-          fontFamily: "Arial",
-          fontSize: "28px",
-          color: "#3a210d",
-          backgroundColor: "#ffe08a",
-          padding: { x: 12, y: 6 },
-        })
-        .setOrigin(0.5)
-        .setDepth(112);
+    if (!this.missionBubble) {
+      this.missionBubble = this.createMissionBubble().setPosition(target.x, target.y - 94);
       this.tweens.add({
-        targets: this.missionText,
-        y: target.y - 124,
-        duration: 560,
+        targets: this.missionBubble,
+        y: target.y - 101,
+        scaleX: 1.025,
+        scaleY: 1.025,
+        duration: 680,
         yoyo: true,
         repeat: -1,
         ease: "Sine.easeInOut",
@@ -411,12 +443,14 @@ export class VillageScene extends Phaser.Scene {
     }
 
     if (this.missionTargetId !== target.id) {
-      this.tweens.killTweensOf(this.missionText);
-      this.missionText.setY(target.y - 112);
+      this.tweens.killTweensOf(this.missionBubble);
+      this.missionBubble.setPosition(target.x, target.y - 94).setScale(1);
       this.tweens.add({
-        targets: this.missionText,
-        y: target.y - 124,
-        duration: 560,
+        targets: this.missionBubble,
+        y: target.y - 101,
+        scaleX: 1.025,
+        scaleY: 1.025,
+        duration: 680,
         yoyo: true,
         repeat: -1,
         ease: "Sine.easeInOut",
@@ -425,7 +459,7 @@ export class VillageScene extends Phaser.Scene {
 
     this.missionTargetId = target.id;
     this.missionHalo.setPosition(target.x, target.y + 4).setVisible(true);
-    this.missionText.setPosition(target.x, this.missionText.y).setVisible(true);
+    this.missionBubble.setPosition(target.x, this.missionBubble.y).setVisible(true);
   }
 
   private clearMissionMarker() {
@@ -434,10 +468,10 @@ export class VillageScene extends Phaser.Scene {
       this.missionHalo.destroy();
       this.missionHalo = undefined;
     }
-    if (this.missionText) {
-      this.tweens.killTweensOf(this.missionText);
-      this.missionText.destroy();
-      this.missionText = undefined;
+    if (this.missionBubble) {
+      this.tweens.killTweensOf(this.missionBubble);
+      this.missionBubble.destroy();
+      this.missionBubble = undefined;
     }
     this.missionTargetId = undefined;
   }

@@ -135,6 +135,11 @@ type MissionStep = {
   progress: string;
 };
 
+type MissionDialogState = {
+  kind: "next" | "complete";
+  mission: MissionStep;
+};
+
 const getCurrentMission = (game: GameState): MissionStep | null => {
   if (!game.selectedRegion) return null;
   const region = regions[game.selectedRegion];
@@ -154,12 +159,21 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
   );
   const classroomSuccess = game.stats.trades >= 1 && game.stats.crafts >= 1;
 
+  if (game.workers < 1) {
+    return {
+      id: "recruit-first-worker",
+      title: "마을 본부에서 일꾼을 뽑아보세요",
+      detail: `마을 본부를 눌러 곡식 ${workerRecruitCost(game.workers)}개로 첫 일꾼을 뽑으세요.`,
+      progress: "1/11",
+    };
+  }
+
   if (game.builtStage < 1) {
     return {
       id: "build-stage-1",
       title: `${firstBuilding.name} 짓기`,
       detail: `${resourceNames[region.resource]} ${firstBuilding.cost[region.resource] ?? 3}개를 모아 첫 건물을 지으세요.`,
-      progress: "1/10",
+      progress: "2/11",
     };
   }
 
@@ -168,7 +182,7 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "recruit-merchant",
       title: "상인 뽑기",
       detail: `1단계 건물(${firstBuilding.name})을 눌러 상인을 뽑으세요.`,
-      progress: "2/10",
+      progress: "3/11",
     };
   }
 
@@ -177,7 +191,7 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "trade-resource",
       title: "부족한 자원 교류하기",
       detail: "교류하기를 눌러 다른 지역 자원을 받아오세요.",
-      progress: "3/10",
+      progress: "4/11",
     };
   }
 
@@ -186,7 +200,7 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "build-stage-2",
       title: `${secondBuilding.name} 짓기`,
       detail: "자원을 더 모아 2단계 건물을 지으세요.",
-      progress: "4/10",
+      progress: "5/11",
     };
   }
 
@@ -195,7 +209,7 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "adopt-companion",
       title: companionSpecs[game.selectedRegion].action,
       detail: `2단계 건물을 눌러 ${companionSpecs[game.selectedRegion].name}을 만나세요.`,
-      progress: "5/10",
+      progress: "6/11",
     };
   }
 
@@ -204,7 +218,7 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "build-stage-3",
       title: `${thirdBuilding.name} 짓기`,
       detail: "3단계 건물을 지으면 이웃 마을을 구경할 수 있어요.",
-      progress: "6/10",
+      progress: "7/11",
     };
   }
 
@@ -213,7 +227,7 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "build-stage-4",
       title: `${fourthBuilding.name} 짓기`,
       detail: "이웃 마을을 구경해 보고, 4단계 건물을 지어 대표 상품 만들기를 여세요.",
-      progress: "7/10",
+      progress: "8/11",
     };
   }
 
@@ -222,7 +236,7 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "craft-product",
       title: `${region.productName} 만들기`,
       detail: `4단계 건물(${fourthBuilding.name})을 눌러 ${region.shortName} 대표 상품을 만드세요.`,
-      progress: "8/10",
+      progress: "9/11",
     };
   }
 
@@ -231,7 +245,7 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "feature-building",
       title: "상품 건물 1개 짓기",
       detail: "만든 상품 1개로 생산·제작·교류를 도와주는 건물을 지어보세요.",
-      progress: "9/10",
+      progress: "10/11",
     };
   }
 
@@ -240,7 +254,7 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "build-stage-5",
       title: `${fifthBuilding.name} 짓기`,
       detail: "5단계 건물을 지으면 상품을 다른 지역으로 보낼 수 있어요.",
-      progress: "10/10",
+      progress: "11/11",
     };
   }
 
@@ -287,7 +301,7 @@ const makeInitialState = (regionId: RegionId): GameState => {
   return {
     selectedRegion: regionId,
     resources,
-    workers: 1,
+    workers: 0,
     merchants: [],
     development: 0,
     autoBonus: 0,
@@ -379,10 +393,12 @@ export default function App() {
   const [productTradeTarget, setProductTradeTarget] = useState<RegionId | null>(null);
   const [receiveProductId, setReceiveProductId] = useState<ProductId | null>(null);
   const [selectedBuildStage, setSelectedBuildStage] = useState<number | null>(null);
+  const [missionDialog, setMissionDialog] = useState<MissionDialogState | null>(null);
   const gameRef = useRef<GameState | null>(null);
   const editModeRef = useRef<typeof editMode>(null);
   const visitRegionRef = useRef<RegionId | null>(null);
   const sceneBusyRef = useRef(false);
+  const previousMissionRef = useRef<MissionStep | null>(null);
 
   const selectedRegion = game?.selectedRegion ? regions[game.selectedRegion] : null;
   const selectedBuilding = game?.buildings.find((building) => building.id === selectedBuildingId) ?? null;
@@ -415,12 +431,34 @@ export default function App() {
   }, [modal, pushCommand]);
 
   useEffect(() => {
+    if (!game) {
+      previousMissionRef.current = null;
+      setMissionDialog(null);
+      return;
+    }
+    if (game.success) return;
+
+    const mission = getCurrentMission(game);
+    if (!mission) return;
+    const previousMission = previousMissionRef.current;
+    previousMissionRef.current = mission;
+
+    if (!previousMission) {
+      setMissionDialog({ kind: "next", mission });
+      return;
+    }
+    if (previousMission.id !== mission.id) {
+      setMissionDialog({ kind: "complete", mission: previousMission });
+    }
+  }, [game]);
+
+  useEffect(() => {
     if (!game || game.success) return;
     const timer = window.setInterval(() => {
       setProductionLeft((left) => {
         if (left > 1) return left - 1;
         setGame((current) => {
-          if (!current?.selectedRegion || current.success) return current;
+          if (!current?.selectedRegion || current.success || current.workers < 1) return current;
           const region = regions[current.selectedRegion];
           const amount = autoProductionAmount(current);
           const resources = { ...current.resources };
@@ -618,6 +656,16 @@ export default function App() {
     const next = makeInitialState(regionId);
     setGame(next);
     setNotice(`${regions[regionId].name}을 선택했어요. 자원을 모아 발전시켜 보세요.`);
+  };
+
+  const acknowledgeMissionDialog = () => {
+    if (!missionDialog) return;
+    if (missionDialog.kind === "complete") {
+      const nextMission = game ? getCurrentMission(game) : null;
+      setMissionDialog(nextMission ? { kind: "next", mission: nextMission } : null);
+      return;
+    }
+    setMissionDialog(null);
   };
 
   const beginBuild = (building: VillageBuildingSpec) => {
@@ -942,7 +990,6 @@ export default function App() {
         <>
           <Hud game={game} productionLeft={productionLeft} />
           <MissionGuide game={game} />
-          <div className="notice-board">{notice}</div>
           <div className="action-bar">
             <button className={pulseBuildButton ? "game-button mission-pulse" : "game-button"} onClick={() => setModal("build")}>
               <Hammer size={22} /> 건설하기
@@ -959,6 +1006,8 @@ export default function App() {
           </div>
         </>
       )}
+
+      {missionDialog && <MissionDialog dialog={missionDialog} onConfirm={acknowledgeMissionDialog} />}
 
 
       {visitRegion && (
@@ -1385,6 +1434,22 @@ function Hud({ game, productionLeft }: { game: GameState; productionLeft: number
         <span>자동 생산 {productionLeft}초</span>
       </div>
     </section>
+  );
+}
+
+function MissionDialog({ dialog, onConfirm }: { dialog: MissionDialogState; onConfirm: () => void }) {
+  const isComplete = dialog.kind === "complete";
+
+  return (
+    <div className="mission-dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="mission-dialog-title">
+      <section className="mission-dialog">
+        <span className="eyebrow">{isComplete ? "할 일 완료" : "다음 할 일"}</span>
+        <span className="mission-badge">{isComplete ? "완료" : dialog.mission.progress}</span>
+        <h2 id="mission-dialog-title">{isComplete ? `${dialog.mission.title} 완료!` : dialog.mission.title}</h2>
+        {!isComplete && <p>{dialog.mission.detail}</p>}
+        <button className="game-button mission-dialog-confirm" onClick={onConfirm}>확인</button>
+      </section>
+    </div>
   );
 }
 
