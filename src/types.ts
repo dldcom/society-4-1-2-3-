@@ -9,6 +9,12 @@ export type PlacedBuilding = {
   productionBoosted: boolean;
 };
 
+export type Construction = {
+  building: PlacedBuilding;
+  startedAt: number;
+  completesAt: number;
+};
+
 export type Merchant = {
   id: string;
   name: string;
@@ -37,7 +43,10 @@ export type GameState = {
   builtStage: number;
   featureBuildings: string[];
   buildings: PlacedBuilding[];
+  construction?: Construction;
+  constructionQueue?: Construction[];
   companions?: Partial<Record<RegionId, boolean>>;
+  companionCounts?: Partial<Record<RegionId, number>>;
   hasDog: boolean;
   stats: GameStats;
   success: boolean;
@@ -52,8 +61,11 @@ export type BuildZoneRect = {
 };
 
 export type RouteTuning = {
-  workerSpots: Partial<Record<RegionId, Array<[number, number]>>>;
-  merchantRoutes: Partial<Record<RegionId, Array<[number, number]>>>;
+  workerSpots?: Partial<Record<RegionId, Array<[number, number]>>>;
+  merchantRoutes?: Partial<Record<RegionId, Array<[number, number]>>>;
+  workerSpawns: Partial<Record<RegionId, Array<[number, number]>>>;
+  merchantDestinations: Partial<Record<RegionId, [number, number]>>;
+  blockedTiles: Partial<Record<RegionId, string[]>>;
   buildZones: Partial<Record<RegionId, BuildZoneRect[]>>;
 };
 
@@ -61,7 +73,7 @@ export type SceneCommand =
   | { type: "sync"; state: GameState; tuning: RouteTuning }
   | { type: "setState"; state: GameState }
   | { type: "setTuning"; tuning: RouteTuning }
-  | { type: "setEditMode"; mode: "worker" | "merchant" | "buildZone" | null; target?: RegionId }
+  | { type: "setEditMode"; mode: "worker" | "merchant" | "workerSpawn" | "merchantDestination" | "blockedPaint" | "blockedErase" | "buildZone" | null; target?: RegionId }
   | { type: "setMapView"; mode: "play" | "overview" }
   | { type: "startPlacement"; building: VillageBuildingSpec }
   | { type: "cancelPlacement" }
@@ -78,5 +90,6 @@ export type SceneEvent =
   | { type: "productWagonReturned"; target: RegionId; product: ProductId }
   | { type: "companionFoundResource"; resource: ResourceId }
   | { type: "editPoint"; x: number; y: number }
+  | { type: "editTiles"; tiles: string[]; blocked: boolean }
   | { type: "moveBuildZoneRect"; zoneIndex: number; rect: BuildZoneRect }
   | { type: "notice"; message: string };

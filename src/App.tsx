@@ -41,6 +41,8 @@ const BUILD_STATUS_READY = "건설 가능";
 const BUILD_STATUS_DONE = "완성";
 const BUILD_STATUS_LOCKED = "잠김";
 const BUILD_STATUS_MISSING = "자원 부족";
+const BUILD_STATUS_IN_PROGRESS = "공사 중";
+const BUILD_DURATION_MS = 5000;
 const NORMAL_BUILDING_MAX_COPIES: Record<number, number> = {
   1: 3,
   2: 2,
@@ -64,13 +66,18 @@ const normalBuildings = (game: GameState) =>
 const placedStageCount = (game: GameState, stage: number) =>
   normalBuildings(game).filter((building) => !isFeatureBuilding(building.spec) && building.spec.stage === stage).length;
 
+const scheduledStageCount = (game: GameState, stage: number) =>
+  [game.construction, ...(game.constructionQueue ?? [])].filter(
+    (construction) => construction && !isFeatureBuilding(construction.building.spec) && construction.building.spec.stage === stage,
+  ).length;
+
 const normalBuildingLimit = (stage: number) => NORMAL_BUILDING_MAX_COPIES[stage] ?? 1;
 
 const isNormalBuildingUnlocked = (game: GameState, building: BuildingSpec) =>
   building.stage === 1 || placedStageCount(game, building.stage - 1) > 0;
 
 const scaledNormalBuildingCost = (game: GameState, building: BuildingSpec) => {
-  const copyNumber = placedStageCount(game, building.stage) + 1;
+  const copyNumber = placedStageCount(game, building.stage) + scheduledStageCount(game, building.stage) + 1;
   const multiplier = building.stage <= 2 ? copyNumber : 1;
   return Object.fromEntries(
     Object.entries(building.cost).map(([item, amount]) => [item, (amount ?? 0) * multiplier]),
@@ -79,7 +86,7 @@ const scaledNormalBuildingCost = (game: GameState, building: BuildingSpec) => {
 
 const canBuildNormalBuilding = (game: GameState, building: BuildingSpec) => {
   if (!isNormalBuildingUnlocked(game, building)) return false;
-  if (placedStageCount(game, building.stage) >= normalBuildingLimit(building.stage)) return false;
+  if (placedStageCount(game, building.stage) + scheduledStageCount(game, building.stage) >= normalBuildingLimit(building.stage)) return false;
   return canPay(game.resources, scaledNormalBuildingCost(game, building));
 };
 
@@ -100,6 +107,11 @@ const emptyCompanions = (): Partial<Record<RegionId, boolean>> => ({
 
 const hasRegionCompanion = (game: GameState, regionId: RegionId) =>
   Boolean(game.companions?.[regionId] || (regionId === "rural" && game.hasDog));
+
+const companionCount = (game: GameState, regionId: RegionId) =>
+  game.companionCounts?.[regionId] ?? (hasRegionCompanion(game, regionId) ? 1 : 0);
+
+const companionLimit = (game: GameState) => placedStageCount(game, 2);
 
 const formatCost = (cost: Partial<Record<ItemId, number>>) =>
   Object.entries(cost)
@@ -308,7 +320,10 @@ const makeInitialState = (regionId: RegionId): GameState => {
     builtStage: 0,
     featureBuildings: [],
     buildings: [],
+    construction: undefined,
+    constructionQueue: [],
     companions: emptyCompanions(),
+    companionCounts: {},
     hasDog: false,
     stats: { trades: 0, productTrades: 0, crafts: 0 },
     success: false,
@@ -317,7 +332,7 @@ const makeInitialState = (regionId: RegionId): GameState => {
 
 type Modal = "build" | "trade" | "visit" | "craftProduct" | "productTrade" | "routes" | null;
 
-const emptyTuning = (): RouteTuning => ({ workerSpots: {}, merchantRoutes: {}, buildZones: {} });
+const emptyTuning = (): RouteTuning => ({ workerSpots: {}, merchantRoutes: {}, workerSpawns: {}, merchantDestinations: {}, blockedTiles: {}, buildZones: {} });
 
 
 const visitBuildingPositions: Array<[number, number]> = [
@@ -345,6 +360,8 @@ const makeVisitState = (base: GameState, regionId: RegionId): GameState => {
       productionBoosted: spec.stage >= 5,
     })),
     featureBuildings: base.featureBuildings ?? [],
+    construction: undefined,
+    constructionQueue: [],
     merchants: Array.from({ length: Math.max(base.merchants.length, builtStage >= 1 ? 1 : 0) }, (_, index) => ({
       id: `visit-merchant-${regionId}-${index}`,
       name: `상인${index + 1}`,
@@ -353,6 +370,7 @@ const makeVisitState = (base: GameState, regionId: RegionId): GameState => {
       target: base.selectedRegion ?? "rural",
     })),
     companions: { [regionId]: hasRegionCompanion(base, regionId) },
+    companionCounts: { [regionId]: companionCount(base, regionId) },
     hasDog: regionId === "rural" && hasRegionCompanion(base, "rural"),
     isVisit: true,
   };
@@ -366,6 +384,9 @@ const loadTuning = (): RouteTuning => {
     return {
       workerSpots: { ...(codeTuning.workerSpots ?? {}), ...(localTuning.workerSpots ?? {}) },
       merchantRoutes: { ...(codeTuning.merchantRoutes ?? {}), ...(localTuning.merchantRoutes ?? {}) },
+      workerSpawns: { ...(codeTuning.workerSpawns ?? {}), ...(localTuning.workerSpawns ?? {}) },
+      merchantDestinations: { ...(codeTuning.merchantDestinations ?? {}), ...(localTuning.merchantDestinations ?? {}) },
+      blockedTiles: { ...(codeTuning.blockedTiles ?? {}), ...(localTuning.blockedTiles ?? {}) },
       buildZones: { ...(codeTuning.buildZones ?? {}), ...(localTuning.buildZones ?? {}) },
     };
   } catch {
@@ -377,6 +398,7 @@ export default function App() {
   const [game, setGame] = useState<GameState | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [tuning, setTuning] = useState<RouteTuning>(() => loadTuning());
+  const [tileHistory, setTileHistory] = useState<Array<{ regionId: RegionId; tiles: string[]; blocked: boolean[] }>>([]);
   const [editMode, setEditMode] = useState<{ mode: "worker" | "merchant" | "buildZone"; target?: RegionId } | null>(null);
   const [selectedBuildingId, setSelectedBuildingId] = useState<string | null>(null);
   const [selectedMainBuilding, setSelectedMainBuilding] = useState(false);
@@ -524,6 +546,17 @@ export default function App() {
       setNotice(`좌표 ${event.x}, ${event.y} 추가`);
       return;
     }
+    if (event.type === "editTiles") {
+      setTuning((current) => {
+        const regionId = gameRef.current?.selectedRegion;
+        if (!regionId) return current;
+        const blocked = new Set(current.blockedTiles?.[regionId] ?? []);
+        setTileHistory((history) => [...history.slice(-29), { regionId, tiles: event.tiles, blocked: event.tiles.map((tile) => blocked.has(tile)) }]);
+        event.tiles.forEach((tile) => event.blocked ? blocked.add(tile) : blocked.delete(tile));
+        return { ...current, blockedTiles: { ...(current.blockedTiles ?? {}), [regionId]: [...blocked] } };
+      });
+      return;
+    }
     if (event.type === "moveBuildZoneRect") {
       setTuning((current) => {
         const activeGame = gameRef.current;
@@ -612,15 +645,15 @@ export default function App() {
             productionBoosted: false,
           };
           const resources = payCost(current.resources, event.building.cost);
-          setNotice(`${event.building.name} 완성! ${event.building.effect}`);
+          const startedAt = Date.now();
+          const construction = { building: placed, startedAt, completesAt: startedAt + BUILD_DURATION_MS };
+          setNotice(`${event.building.name} 공사를 시작했어요.`);
           setModal(null);
           return {
             ...current,
             resources,
-            autoBonus: event.building.effectKind === "production" ? current.autoBonus + 1 : current.autoBonus,
-            featureBuildings: [...current.featureBuildings, event.building.id],
-            buildings: [...current.buildings, placed],
-            development: current.development + 5,
+            construction: current.construction ?? construction,
+            constructionQueue: current.construction ? [...(current.constructionQueue ?? []), construction] : current.constructionQueue,
           };
         }
         if (!canBuildNormalBuilding(current, event.building)) {
@@ -637,16 +670,15 @@ export default function App() {
           productionBoosted: false,
         };
         const resources = payCost(current.resources, cost);
-        const success = event.building.stage === 6;
-        setNotice(success ? "최종 건물 완성!" : `${event.building.name} 완성!`);
+        const startedAt = Date.now();
+        const construction = { building: placed, startedAt, completesAt: startedAt + BUILD_DURATION_MS };
+        setNotice(`${event.building.name} 공사를 시작했어요.`);
         setModal(null);
         return {
           ...current,
           resources,
-          builtStage: Math.max(current.builtStage, event.building.stage),
-          buildings: [...current.buildings, placed],
-          development: current.development + event.building.stage * 4,
-          success,
+          construction: current.construction ?? construction,
+          constructionQueue: current.construction ? [...(current.constructionQueue ?? []), construction] : current.constructionQueue,
         };
       });
     }
@@ -786,15 +818,17 @@ export default function App() {
   };
 
   const adoptCompanion = () => {
-    if (!game?.selectedRegion || hasRegionCompanion(game, game.selectedRegion)) return;
+    if (!game?.selectedRegion || companionCount(game, game.selectedRegion) >= companionLimit(game)) return;
     const regionId = game.selectedRegion;
+    const nextCount = companionCount(game, regionId) + 1;
     setGame({
       ...game,
       companions: { ...emptyCompanions(), ...(game.companions ?? {}), [regionId]: true },
+      companionCounts: { ...(game.companionCounts ?? {}), [regionId]: nextCount },
       hasDog: regionId === "rural" ? true : game.hasDog,
       development: game.development + 2,
     });
-    setNotice(companionSpecs[regionId].adoptedMessage);
+    setNotice(`${companionSpecs[regionId].adoptedMessage} (${nextCount}/${companionLimit(game)})`);
   };
 
   const sendTrade = () => {
@@ -832,6 +866,9 @@ export default function App() {
       const tuningToSave: RouteTuning = {
         workerSpots: tuning.workerSpots,
         merchantRoutes: tuning.merchantRoutes,
+        workerSpawns: tuning.workerSpawns,
+        merchantDestinations: tuning.merchantDestinations,
+        blockedTiles: tuning.blockedTiles,
         buildZones: tuning.buildZones,
       };
       const response = await fetch("/api/save-route-tuning", {
@@ -914,11 +951,46 @@ export default function App() {
   const buildStatuses = useMemo(() => {
     if (!game || !selectedRegion) return [];
     return selectedRegion.buildings.map((building) => {
-      if (placedStageCount(game, building.stage) >= normalBuildingLimit(building.stage)) return BUILD_STATUS_DONE;
+      const totalStageCount = placedStageCount(game, building.stage) + scheduledStageCount(game, building.stage);
+      if (totalStageCount >= normalBuildingLimit(building.stage)) {
+        return scheduledStageCount(game, building.stage) > 0 ? BUILD_STATUS_IN_PROGRESS : BUILD_STATUS_DONE;
+      }
       if (!isNormalBuildingUnlocked(game, building)) return BUILD_STATUS_LOCKED;
       return canPay(game.resources, scaledNormalBuildingCost(game, building)) ? BUILD_STATUS_READY : BUILD_STATUS_MISSING;
     });
   }, [game, selectedRegion]);
+
+  useEffect(() => {
+    if (!game || game.isVisit) return;
+    const constructions = [game.construction, ...(game.constructionQueue ?? [])].filter((construction): construction is NonNullable<GameState["construction"]> => Boolean(construction));
+    const timers = constructions.map((construction) => window.setTimeout(() => {
+      setGame((current) => {
+        if (!current) return current;
+        const activeConstructions = [current.construction, ...(current.constructionQueue ?? [])].filter(
+          (item): item is NonNullable<GameState["construction"]> => Boolean(item),
+        );
+        const completed = activeConstructions.find((item) => item.building.id === construction.building.id);
+        if (!completed) return current;
+        const { building } = completed;
+        const remainingConstructions = activeConstructions.filter((item) => item.building.id !== completed.building.id);
+        const feature = isFeatureBuilding(building.spec);
+        const success = !feature && building.spec.stage === 6;
+        setNotice(success ? "최종 건물 완성!" : `${building.spec.name} 완성!`);
+        return {
+          ...current,
+          construction: remainingConstructions[0],
+          constructionQueue: remainingConstructions.slice(1),
+          autoBonus: feature && building.spec.effectKind === "production" ? current.autoBonus + 1 : current.autoBonus,
+          featureBuildings: feature ? [...current.featureBuildings, building.spec.id] : current.featureBuildings,
+          builtStage: feature ? current.builtStage : Math.max(current.builtStage, building.spec.stage),
+          buildings: [...current.buildings, building],
+          development: current.development + (feature ? 5 : building.spec.stage * 4),
+          success: success || current.success,
+        };
+      });
+    }, Math.max(0, construction.completesAt - Date.now())));
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [game, game?.isVisit]);
 
   const selectedBuild = useMemo(() => {
     if (!selectedRegion || selectedBuildStage === null) return null;
@@ -981,7 +1053,9 @@ export default function App() {
       : [];
   const currentMission = getCurrentMission(game);
   const pulseBuildButton = currentMission ? ["build-stage-1", "build-stage-2", "build-stage-3", "build-stage-4", "build-stage-5", "final-building", "feature-building"].includes(currentMission.id) : false;
-  const pulseTradeButton = currentMission?.id === "trade-resource";
+  const hasTravelingMerchant = game.merchants.some((merchant) => merchant.status === "traveling");
+  const pulseTradeButton = currentMission?.id === "trade-resource" && !hasTravelingMerchant;
+  const actionsLockedUntilFirstWorker = game.workers < 1;
 
   return (
     <main className={modal === "routes" ? "game-shell route-mode" : "game-shell"}>
@@ -991,10 +1065,10 @@ export default function App() {
           <Hud game={game} productionLeft={productionLeft} />
           <MissionGuide game={game} />
           <div className="action-bar">
-            <button className={pulseBuildButton ? "game-button mission-pulse" : "game-button"} onClick={() => setModal("build")}>
+            <button className={pulseBuildButton ? "game-button mission-pulse" : "game-button"} disabled={actionsLockedUntilFirstWorker} title={actionsLockedUntilFirstWorker ? "일꾼을 먼저 뽑아야 합니다." : undefined} onClick={() => setModal("build")}>
               <Hammer size={22} /> 건설하기
             </button>
-            <button className={pulseTradeButton ? "game-button mission-pulse" : "game-button"} onClick={openTrade}>
+            <button className={pulseTradeButton ? "game-button mission-pulse" : "game-button"} disabled={actionsLockedUntilFirstWorker} title={actionsLockedUntilFirstWorker ? "일꾼을 먼저 뽑아야 합니다." : undefined} onClick={openTrade}>
               <HandCoins size={22} /> 교류하기
             </button>
             <button className="round-button" title="동선 편집" onClick={() => setModal("routes")}>
@@ -1059,8 +1133,8 @@ export default function App() {
             </button>
           )}
           {!isFeatureBuilding(selectedBuilding.spec) && selectedBuilding.spec.stage === 2 && game.selectedRegion && (
-            <button className="small-button" onClick={adoptCompanion} disabled={hasRegionCompanion(game, game.selectedRegion)}>
-              {companionSpecs[game.selectedRegion].action}
+            <button className="small-button" onClick={adoptCompanion} disabled={companionCount(game, game.selectedRegion) >= companionLimit(game)}>
+              {companionSpecs[game.selectedRegion].action} ({companionCount(game, game.selectedRegion)}/{companionLimit(game)})
             </button>
           )}
           {!isFeatureBuilding(selectedBuilding.spec) && selectedBuilding.spec.stage === 3 && (
@@ -1321,6 +1395,16 @@ export default function App() {
             setTuning((current) => ({ ...current, workerSpots: { ...current.workerSpots, [game.selectedRegion!]: [] } }));
             setNotice("일꾼 위치를 기본값으로 돌렸어요.");
           }}
+          onUndoBlocked={() => {
+            const previous = tileHistory[tileHistory.length - 1];
+            if (!previous) return;
+            setTuning((current) => {
+              const blocked = new Set(current.blockedTiles?.[previous.regionId] ?? []);
+              previous.tiles.forEach((tile, index) => previous.blocked[index] ? blocked.add(tile) : blocked.delete(tile));
+              return { ...current, blockedTiles: { ...(current.blockedTiles ?? {}), [previous.regionId]: [...blocked] } };
+            });
+            setTileHistory((history) => history.slice(0, -1));
+          }}
           onClearBuildZone={() => {
             setTuning((current) => ({
               ...current,
@@ -1503,6 +1587,7 @@ function RouteEditor({
   editMode,
   onEditMode,
   onClearWorker,
+  onUndoBlocked,
   onClearBuildZone,
   onAddBuildZone,
   onClearMerchant,
@@ -1513,9 +1598,10 @@ function RouteEditor({
 }: {
   regionId: RegionId;
   tuning: RouteTuning;
-  editMode: { mode: "worker" | "merchant" | "buildZone"; target?: RegionId } | null;
-  onEditMode: (mode: { mode: "worker" | "merchant" | "buildZone"; target?: RegionId } | null) => void;
+  editMode: { mode: "worker" | "merchant" | "workerSpawn" | "merchantDestination" | "blockedPaint" | "blockedErase" | "buildZone"; target?: RegionId } | null;
+  onEditMode: (mode: { mode: "worker" | "merchant" | "workerSpawn" | "merchantDestination" | "blockedPaint" | "blockedErase" | "buildZone"; target?: RegionId } | null) => void;
   onClearWorker: () => void;
+  onUndoBlocked: () => void;
   onClearBuildZone: () => void;
   onAddBuildZone: () => void;
   onClearMerchant: (target: RegionId) => void;
@@ -1559,6 +1645,18 @@ function RouteEditor({
             </div>
           </header>
           <PointList points={workerPoints} emptyText="직접 찍은 위치가 없으면 기본 벼밭 위치를 씁니다." onRemove={(index) => onRemovePoint("worker", undefined, index)} />
+        </section>
+
+        <section className="route-card">
+          <header>
+            <strong>이동 불가 타일</strong>
+            <div className="route-actions">
+              <button className={editMode?.mode === "blockedPaint" ? "choice selected" : "choice"} onClick={() => onEditMode(editMode?.mode === "blockedPaint" ? null : { mode: "blockedPaint" })}>막기</button>
+              <button className={editMode?.mode === "blockedErase" ? "choice selected" : "choice"} onClick={() => onEditMode(editMode?.mode === "blockedErase" ? null : { mode: "blockedErase" })}>지우기</button>
+              <button className="choice" onClick={onUndoBlocked}>되돌리기</button>
+            </div>
+          </header>
+          <p className="empty-text">맵의 48px 타일을 클릭해 상인의 이동 불가 구역을 지정합니다.</p>
         </section>
 
         <section className="route-card">
