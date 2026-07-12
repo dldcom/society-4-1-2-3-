@@ -33,6 +33,14 @@ export type GameStats = {
   crafts: number;
 };
 
+export type RepeatMission = {
+  id: string;
+  kind: "craft" | "productTrade" | "resourceTrade";
+  target?: RegionId;
+  progress: number;
+  goal: number;
+};
+
 export type GameState = {
   selectedRegion: RegionId | null;
   resources: Record<ItemId, number>;
@@ -49,6 +57,7 @@ export type GameState = {
   companionCounts?: Partial<Record<RegionId, number>>;
   hasDog: boolean;
   stats: GameStats;
+  repeatMission?: RepeatMission;
   success: boolean;
   isVisit?: boolean;
 };
@@ -64,7 +73,7 @@ export type RouteTuning = {
   workerSpots?: Partial<Record<RegionId, Array<[number, number]>>>;
   merchantRoutes?: Partial<Record<RegionId, Array<[number, number]>>>;
   workerSpawns: Partial<Record<RegionId, Array<[number, number]>>>;
-  merchantDestinations: Partial<Record<RegionId, [number, number]>>;
+  merchantDestinations: Partial<Record<RegionId, Partial<Record<RegionId, [number, number]>>>>;
   blockedTiles: Partial<Record<RegionId, string[]>>;
   buildZones: Partial<Record<RegionId, BuildZoneRect[]>>;
 };
@@ -83,6 +92,9 @@ export type SceneCommand =
   | { type: "floatText"; text: string; x?: number; y?: number };
 
 export type SceneEvent =
+  | { type: "assetLoading"; progress: number }
+  | { type: "assetsReady" }
+  | { type: "regionShown"; regionId: RegionId }
   | { type: "placeBuilding"; building: VillageBuildingSpec; x: number; y: number }
   | { type: "selectBuilding"; buildingId: string }
   | { type: "selectMainBuilding" }

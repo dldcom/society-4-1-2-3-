@@ -16,6 +16,7 @@ import type { BuildZoneRect, GameState, RouteTuning, SceneCommand, SceneEvent } 
 const WORLD_W = 2400;
 const WORLD_H = 1500;
 const MIN_BUILDING_DISTANCE = 118;
+const MAIN_FRONT_CLEARANCE = 240;
 const WORKER_SCALE = 0.96;
 const PLAY_ZOOM = 1.14;
 const MERCHANT_SPEED = 230;
@@ -153,14 +154,20 @@ export class VillageScene extends Phaser.Scene {
   private missionBubble?: Phaser.GameObjects.Container;
   private missionTargetId?: string;
   private workers: Phaser.GameObjects.Sprite[] = [];
+  private workerRegion?: RegionId;
+  private shownRegion?: RegionId;
   private merchants = new Map<string, Phaser.GameObjects.Sprite>();
   private visitors = new Map<string, Phaser.GameObjects.Sprite>();
   private animals: Phaser.GameObjects.Sprite[] = [];
+  private visitBustleTimer?: Phaser.Time.TimerEvent;
   private placement?: VillageBuildingSpec;
   private preview?: Phaser.GameObjects.Image;
   private initialRegion: RegionId;
   private tuning: RouteTuning = { workerSpots: {}, merchantRoutes: {}, workerSpawns: {}, merchantDestinations: {}, blockedTiles: {}, buildZones: {} };
-  private editMode?: { mode: "worker" | "merchant" | "buildZone"; target?: RegionId };
+  private editMode?: {
+    mode: "worker" | "merchant" | "merchantDestination" | "workerSpawn" | "blockedPaint" | "blockedErase" | "buildZone";
+    target?: RegionId;
+  };
   private mapView: "play" | "overview" = "play";
   private routeGraphics?: Phaser.GameObjects.Graphics;
   private buildZoneHandles: Phaser.GameObjects.GameObject[] = [];
@@ -169,42 +176,169 @@ export class VillageScene extends Phaser.Scene {
   private lastPointer?: Phaser.Math.Vector2;
   private pointerMoved = false;
   private editedTiles = new Set<string>();
+  private mineMerchantTestStarted = false;
+  private loadingRegions = new Set<RegionId>();
+  private loadingCharacterAssets = new Set<string>();
+  private loadingCharacterRegions = new Set<RegionId>();
+  private loadingBuildingAssets = new Set<string>();
+  private trackLoadingProgress = false;
+  private hasReceivedTuning = false;
+  private tuningSignature = "";
 
-  constructor(initialRegion: RegionId, emitToReact: EmitEvent) {
+  constructor(initialRegion: RegionId, emitToReact: EmitEvent, initialState?: GameState) {
     super("VillageScene");
     this.initialRegion = initialRegion;
     this.emitToReact = emitToReact;
+    this.state = initialState;
   }
 
   preload() {
-    Object.values(regions).forEach((region) => this.load.image(`bg-${region.id}`, region.bg));
-    Object.values(regions).forEach((region) => {
-      buildingAssetIds.forEach((asset) => {
-        this.load.image(buildingTextureKey(region.id, asset), buildingAssetPath(region.id, asset));
-      });
-      featureBuildingsByRegion[region.id].forEach((building) => {
-        this.load.image(featureBuildingTextureKey(building.id), building.asset);
-      });
-      this.load.image(mainBuildingTextureKey(region.id), mainBuildingAssetPath(region.id));
+    this.beginAssetLoad();
+    this.load.on(Phaser.Loader.Events.PROGRESS, (progress: number) => {
+      if (this.trackLoadingProgress) this.emitToReact({ type: "assetLoading", progress });
     });
+    this.queueRegionAssets(this.initialRegion);
     this.load.image(hammerTextureKey, "/assets/tools/hammer.png");
-    ruralTestVisitors.forEach((visitor) => {
-      this.load.spritesheet(visitorTextureKey(visitor.id), visitor.asset, { frameWidth: 64, frameHeight: 64 });
-    });
-    Object.values(regions).forEach((region) => {
-      const sheets = characterSpriteSheets[region.id];
-      this.load.spritesheet(characterTextureKey(region.id, "workerWalk"), sheets.workerWalk, { frameWidth: 64, frameHeight: 64 });
-      this.load.spritesheet(characterTextureKey(region.id, "workerHarvest"), sheets.workerHarvest, { frameWidth: 64, frameHeight: 64 });
-      this.load.spritesheet(characterTextureKey(region.id, "merchantWalk"), sheets.merchantWalk, { frameWidth: 64, frameHeight: 64 });
-      this.load.spritesheet(characterTextureKey(region.id, "merchantCart"), sheets.merchantCart, { frameWidth: 96, frameHeight: 96 });
-      this.load.spritesheet(characterTextureKey(region.id, "productWagon"), sheets.productWagon, { frameWidth: 96, frameHeight: 96 });
-    });
-    Object.entries(animalSpriteSheets).forEach(([regionId, path]) => {
-      this.load.spritesheet(animalTextureKey(regionId as RegionId), path, {
-        frameWidth: 64,
-        frameHeight: 64,
+  }
+
+  private beginAssetLoad() {
+    this.trackLoadingProgress = true;
+    this.emitToReact({ type: "assetLoading", progress: 0 });
+  }
+
+  private finishAssetLoad() {
+    this.trackLoadingProgress = false;
+    this.emitToReact({ type: "assetsReady" });
+  }
+
+  private queueRegionAssets(regionId: RegionId, state = this.state) {
+    const region = regions[regionId];
+    if (!this.textures.exists(`bg-${regionId}`)) this.load.image(`bg-${regionId}`, region.bg);
+    const buildingSpecs = state?.selectedRegion === regionId
+      ? [
+        ...state.buildings.map((building) => building.spec),
+        ...(state.construction ? [state.construction.building.spec] : []),
+        ...(state.constructionQueue ?? []).map((construction) => construction.building.spec),
+      ]
+      : [];
+    if (buildingSpecs.length > 0) {
+      buildingSpecs.forEach((spec) => {
+        if (this.isFeatureBuilding(spec)) {
+          const key = featureBuildingTextureKey(spec.id);
+          if (!this.textures.exists(key)) this.load.image(key, spec.asset);
+          return;
+        }
+        const key = buildingTextureKey(regionId, spec.asset);
+        if (!this.textures.exists(key)) this.load.image(key, buildingAssetPath(regionId, spec.asset));
       });
+    } else {
+      buildingAssetIds.forEach((asset) => {
+        const key = buildingTextureKey(regionId, asset);
+        if (!this.textures.exists(key)) this.load.image(key, buildingAssetPath(regionId, asset));
+      });
+    }
+    const mainKey = mainBuildingTextureKey(regionId);
+    if (!this.textures.exists(mainKey)) this.load.image(mainKey, mainBuildingAssetPath(regionId));
+  }
+
+  private queueCharacterAssets(regionId: RegionId, state = this.state) {
+    const region = regions[regionId];
+    const sheets = characterSpriteSheets[regionId];
+    const characterAssets: Array<[CharacterSpriteKind, string, number]> = [];
+    if (!state || state.workers > 0) characterAssets.push(["workerWalk", sheets.workerWalk, 64], ["workerHarvest", sheets.workerHarvest, 64]);
+    if (!state || state.merchants.length > 0) characterAssets.push(["merchantWalk", sheets.merchantWalk, 64], ["merchantCart", sheets.merchantCart, 96]);
+    if (!state || state.isVisit) characterAssets.push(["productWagon", sheets.productWagon, 96]);
+    characterAssets.forEach(([kind, path, frameSize]) => {
+      const key = characterTextureKey(regionId, kind);
+      if (!this.textures.exists(key)) this.load.spritesheet(key, path, { frameWidth: frameSize, frameHeight: frameSize });
     });
+    const hasCompanion = Boolean(state?.companions?.[regionId] || (regionId === "rural" && state?.hasDog));
+    const animalKey = animalTextureKey(regionId);
+    if ((!state || hasCompanion) && !this.textures.exists(animalKey)) this.load.spritesheet(animalKey, animalSpriteSheets[regionId], { frameWidth: 64, frameHeight: 64 });
+    if (regionId === "rural" && (!state || !state.isVisit)) {
+      ruralTestVisitors.forEach((visitor) => {
+        const key = visitorTextureKey(visitor.id);
+        if (!this.textures.exists(key)) this.load.spritesheet(key, visitor.asset, { frameWidth: 64, frameHeight: 64 });
+      });
+    }
+  }
+
+  private hasRegionAssets(regionId: RegionId, state = this.state) {
+    if (!this.textures.exists(`bg-${regionId}`) || !this.textures.exists(mainBuildingTextureKey(regionId))) return false;
+    const buildingSpecs = state?.selectedRegion === regionId
+      ? [
+        ...state.buildings.map((building) => building.spec),
+        ...(state.construction ? [state.construction.building.spec] : []),
+        ...(state.constructionQueue ?? []).map((construction) => construction.building.spec),
+      ]
+      : [];
+    if (!buildingSpecs.every((spec) => this.textures.exists(this.textureForBuilding(regionId, spec)))) return false;
+    return true;
+  }
+
+  private ensureRegionAssets(regionId: RegionId) {
+    if (this.hasRegionAssets(regionId)) return true;
+    if (this.loadingRegions.has(regionId)) return false;
+    this.loadingRegions.add(regionId);
+    this.beginAssetLoad();
+    this.queueRegionAssets(regionId);
+    this.load.once(Phaser.Loader.Events.COMPLETE, () => {
+      this.loadingRegions.delete(regionId);
+      this.createAnimationsForRegion(regionId);
+      this.renderState();
+      this.finishAssetLoad();
+    });
+    this.load.start();
+    return false;
+  }
+
+  private ensureCharacterAssetsForState(regionId: RegionId) {
+    if (!this.state || this.loadingCharacterRegions.has(regionId)) return;
+    const needsWorkers = this.state.workers > 0 && !this.textures.exists(characterTextureKey(regionId, "workerWalk"));
+    const needsMerchants = this.state.merchants.length > 0 && !this.textures.exists(characterTextureKey(regionId, "merchantWalk"));
+    const needsWagon = Boolean(this.state.isVisit) && !this.textures.exists(characterTextureKey(regionId, "productWagon"));
+    const needsAnimal = (this.state.companionCounts?.[regionId] ?? (this.hasRegionCompanion(regionId) ? 1 : 0)) > 0
+      && !this.textures.exists(animalTextureKey(regionId));
+    const needsVisitors = regionId === "rural" && !this.state.isVisit && ruralTestVisitors.some((visitor) => !this.textures.exists(visitorTextureKey(visitor.id)));
+    if (!needsWorkers && !needsMerchants && !needsWagon && !needsAnimal && !needsVisitors) return;
+    this.loadingCharacterRegions.add(regionId);
+    this.queueCharacterAssets(regionId);
+    this.load.once(Phaser.Loader.Events.COMPLETE, () => {
+      this.loadingCharacterRegions.delete(regionId);
+      this.createAnimationsForRegion(regionId);
+      this.renderState();
+    });
+    this.load.start();
+  }
+
+  private ensureProductWagonAsset(regionId: RegionId, onReady: () => void) {
+    const key = characterTextureKey(regionId, "productWagon");
+    if (this.textures.exists(key)) return true;
+    if (this.loadingCharacterAssets.has(key)) return false;
+    this.loadingCharacterAssets.add(key);
+    this.load.spritesheet(key, characterSpriteSheets[regionId].productWagon, { frameWidth: 96, frameHeight: 96 });
+    this.load.once(Phaser.Loader.Events.COMPLETE, () => {
+      this.loadingCharacterAssets.delete(key);
+      this.createAnimationsForRegion(regionId);
+      onReady();
+    });
+    this.load.start();
+    return false;
+  }
+
+  private ensureBuildingAsset(regionId: RegionId, building: VillageBuildingSpec, onReady: () => void) {
+    const key = this.textureForBuilding(regionId, building);
+    if (this.textures.exists(key)) return true;
+    if (this.loadingBuildingAssets.has(key)) return false;
+    this.loadingBuildingAssets.add(key);
+    if (this.isFeatureBuilding(building)) this.load.image(key, building.asset);
+    else this.load.image(key, buildingAssetPath(regionId, building.asset));
+    this.load.once(Phaser.Loader.Events.COMPLETE, () => {
+      this.loadingBuildingAssets.delete(key);
+      onReady();
+    });
+    this.load.start();
+    return false;
   }
 
   create() {
@@ -230,11 +364,15 @@ export class VillageScene extends Phaser.Scene {
       this.cameras.main.setBounds(0, 0, WORLD_W, WORLD_H);
       this.applyMapView();
     });
+    if (this.state) this.renderState();
+    this.finishAssetLoad();
   }
 
   applyCommand(command: SceneCommand) {
     if (command.type === "sync") {
       this.tuning = command.tuning;
+      this.hasReceivedTuning = true;
+      this.tuningSignature = JSON.stringify(command.tuning);
       this.state = command.state;
       this.renderState();
       this.drawRouteGuide();
@@ -246,8 +384,13 @@ export class VillageScene extends Phaser.Scene {
       return;
     }
     if (command.type === "setTuning") {
+      const nextSignature = JSON.stringify(command.tuning);
+      const tuningChanged = this.tuningSignature !== "" && nextSignature !== this.tuningSignature;
       this.tuning = command.tuning;
-      this.repositionWorkers();
+      this.hasReceivedTuning = true;
+      this.tuningSignature = nextSignature;
+      this.renderState();
+      if (tuningChanged) this.repositionWorkers();
       this.drawRouteGuide();
       return;
     }
@@ -289,6 +432,7 @@ export class VillageScene extends Phaser.Scene {
   private renderState() {
     if (!this.state?.selectedRegion) return;
     const region = regions[this.state.selectedRegion];
+    if (!this.ensureRegionAssets(region.id)) return;
     if (!this.bg || this.bg.texture.key !== `bg-${region.id}`) {
       this.bg?.destroy();
       this.bg = this.add.image(WORLD_W / 2, WORLD_H / 2, `bg-${region.id}`).setDisplaySize(WORLD_W, WORLD_H).setDepth(-10);
@@ -333,10 +477,19 @@ export class VillageScene extends Phaser.Scene {
 
     this.renderConstruction();
     this.renderMissionMarker();
-    this.renderWorkers();
-    this.renderMerchants();
-    this.renderVisitors();
-    this.renderAnimals();
+    if (this.hasReceivedTuning) {
+      this.ensureCharacterAssetsForState(region.id);
+      this.renderWorkers();
+      this.renderMerchants();
+      this.renderVisitors();
+      this.renderAnimals();
+      this.renderVisitBustle();
+      this.runMineMerchantNavigationTest();
+    }
+    if (this.shownRegion !== region.id) {
+      this.shownRegion = region.id;
+      this.emitToReact({ type: "regionShown", regionId: region.id });
+    }
   }
 
   private renderConstruction() {
@@ -376,10 +529,18 @@ export class VillageScene extends Phaser.Scene {
   private renderWorkers() {
     if (!this.state?.selectedRegion) return;
     const regionId = this.currentRegion();
+    if (this.workerRegion !== regionId) {
+      this.workers.forEach((worker) => this.destroySprite(worker));
+      this.workers = [];
+      this.workerRegion = regionId;
+    }
+    if (!this.textures.exists(characterTextureKey(regionId, "workerWalk")) || !this.textures.exists(characterTextureKey(regionId, "workerHarvest"))) {
+      return;
+    }
     while (this.workers.length < this.state.workers) {
       const index = this.workers.length;
-      const target = this.getWorkerSpot(index);
-      const spawn = this.getWorkerSpawn(index);
+      const target = this.getWorkerSpawn(index);
+      const spawn: [number, number] = [MAIN_FRONT[0] + index * 42, MAIN_FRONT[1]];
       const sprite = this.add.sprite(spawn[0], spawn[1], characterTextureKey(regionId, "workerWalk"), 0).setScale(WORKER_SCALE).setDepth(80);
       this.workers.push(sprite);
       this.moveSpriteOrthogonally(
@@ -588,26 +749,29 @@ export class VillageScene extends Phaser.Scene {
   }
 
   private createAnimations() {
-    Object.values(regions).forEach((region) => {
-      const harvestKey = workerHarvestAnimationKey(region.id);
-      if (!this.anims.exists(harvestKey)) {
-        this.anims.create({
-          key: harvestKey,
-          frames: this.anims.generateFrameNumbers(characterTextureKey(region.id, "workerHarvest"), { start: 0, end: 3 }),
-          frameRate: 6,
-          repeat: -1,
-        });
-      }
-      this.createDirectionalAnimation(characterTextureKey(region.id, "workerWalk"), `worker-${region.id}`);
-      this.createDirectionalAnimation(characterTextureKey(region.id, "merchantWalk"), `merchant-${region.id}`);
-      this.createDirectionalAnimation(characterTextureKey(region.id, "merchantCart"), `merchant-cart-${region.id}`);
-      this.createDirectionalAnimation(characterTextureKey(region.id, "productWagon"), `product-wagon-${region.id}`);
-    });
-    Object.values(regions).forEach((region) => this.createDirectionalAnimation(animalTextureKey(region.id), `animal-${region.id}`));
-    ruralTestVisitors.forEach((visitor) => this.createVisitorDirectionalAnimation(visitorTextureKey(visitor.id), `visitor-${visitor.id}`));
+    this.createAnimationsForRegion(this.initialRegion);
+  }
+
+  private createAnimationsForRegion(regionId: RegionId) {
+    const harvestKey = workerHarvestAnimationKey(regionId);
+    if (this.textures.exists(characterTextureKey(regionId, "workerHarvest")) && !this.anims.exists(harvestKey)) {
+      this.anims.create({
+        key: harvestKey,
+        frames: this.anims.generateFrameNumbers(characterTextureKey(regionId, "workerHarvest"), { start: 0, end: 3 }),
+        frameRate: 6,
+        repeat: -1,
+      });
+    }
+    this.createDirectionalAnimation(characterTextureKey(regionId, "workerWalk"), `worker-${regionId}`);
+    this.createDirectionalAnimation(characterTextureKey(regionId, "merchantWalk"), `merchant-${regionId}`);
+    this.createDirectionalAnimation(characterTextureKey(regionId, "merchantCart"), `merchant-cart-${regionId}`);
+    this.createDirectionalAnimation(characterTextureKey(regionId, "productWagon"), `product-wagon-${regionId}`);
+    this.createDirectionalAnimation(animalTextureKey(regionId), `animal-${regionId}`);
+    if (regionId === "rural") ruralTestVisitors.forEach((visitor) => this.createVisitorDirectionalAnimation(visitorTextureKey(visitor.id), `visitor-${visitor.id}`));
   }
 
   private createDirectionalAnimation(texture: string, prefix: string) {
+    if (!this.textures.exists(texture)) return;
     (["down", "left", "right", "up"] as Direction[]).forEach((direction, row) => {
       const key = `${prefix}-${direction}`;
       if (this.anims.exists(key)) return;
@@ -777,7 +941,9 @@ export class VillageScene extends Phaser.Scene {
   private getWorkerSpawn(index: number): [number, number] {
     const regionId = this.state?.selectedRegion ?? this.initialRegion;
     const spawns = this.tuning.workerSpawns?.[regionId] ?? [];
-    return spawns[index] ?? [MAIN_FRONT[0] + index * 42, MAIN_FRONT[1]];
+    if (spawns[index]) return spawns[index];
+    if (this.state?.isVisit) return RESOURCE_SPOTS[regionId][index % RESOURCE_SPOTS[regionId].length];
+    return [MAIN_FRONT[0] + index * 42, MAIN_FRONT[1]];
   }
 
   private repositionWorkers() {
@@ -800,6 +966,7 @@ export class VillageScene extends Phaser.Scene {
         this.merchants.delete(id);
       }
     });
+    if (!this.textures.exists(characterTextureKey(regionId, "merchantWalk")) || !this.textures.exists(characterTextureKey(regionId, "merchantCart"))) return;
     this.state.merchants.forEach((merchant, index) => {
       if (!this.merchants.has(merchant.id)) {
         const sprite = this.add
@@ -821,13 +988,68 @@ export class VillageScene extends Phaser.Scene {
     });
   }
 
+  private renderVisitBustle() {
+    if (!this.state?.isVisit) {
+      this.visitBustleTimer?.remove(false);
+      this.visitBustleTimer = undefined;
+      return;
+    }
+    if (this.visitBustleTimer) return;
+    const launchWagon = () => {
+      if (!this.state?.isVisit) {
+        this.visitBustleTimer = undefined;
+        return;
+      }
+      const regionId = this.currentRegion();
+      const target = (Object.keys(regions) as RegionId[]).find((id) => id !== regionId) ?? "rural";
+      this.animateProductWagon(target, regions[regionId].product);
+      this.visitBustleTimer = this.time.delayedCall(4200, launchWagon);
+    };
+    this.visitBustleTimer = this.time.delayedCall(900, launchWagon);
+  }
+
   private renderVisitors() {
+    const regionId = this.currentRegion();
+    const hasRequiredVisitorAssets = this.state?.isVisit
+      ? this.textures.exists(characterTextureKey(regionId, "merchantWalk"))
+      : ruralTestVisitors.every((visitor) => this.textures.exists(visitorTextureKey(visitor.id)));
+    if (!hasRequiredVisitorAssets) {
+      this.visitors.forEach((visitor) => this.destroySprite(visitor));
+      this.visitors.clear();
+      return;
+    }
+    if (this.state?.isVisit) {
+      const ids = Array.from({ length: 3 }, (_, index) => `visit-crowd-${index}`);
+      this.visitors.forEach((visitor, id) => {
+        if (!ids.includes(id)) {
+          this.destroySprite(visitor);
+          this.visitors.delete(id);
+        }
+      });
+      ids.forEach((id, index) => {
+        if (this.visitors.has(id)) return;
+        const sprite = this.add
+          .sprite(760 + index * 150, 950 + (index % 2) * 110, characterTextureKey(regionId, "merchantWalk"), 0)
+          .setScale(WORKER_SCALE)
+          .setDepth(88 + index);
+        this.visitors.set(id, sprite);
+        this.startVisitCrowdPatrol(sprite, regionId, index);
+      });
+      return;
+    }
     const showVisitors = this.state?.selectedRegion === "rural" && !this.state?.isVisit;
     if (!showVisitors) {
       this.visitors.forEach((visitor) => this.destroySprite(visitor));
       this.visitors.clear();
       return;
     }
+    const ruralVisitorIds = new Set(ruralTestVisitors.map((visitor) => visitor.id));
+    this.visitors.forEach((visitor, id) => {
+      if (!ruralVisitorIds.has(id)) {
+        this.destroySprite(visitor);
+        this.visitors.delete(id);
+      }
+    });
     ruralTestVisitors.forEach((visitor) => {
       if (this.visitors.has(visitor.id)) return;
       const sprite = this.add
@@ -840,6 +1062,7 @@ export class VillageScene extends Phaser.Scene {
   }
 
   private createVisitorDirectionalAnimation(texture: string, prefix: string) {
+    if (!this.textures.exists(texture)) return;
     (["down", "up", "left", "right"] as Direction[]).forEach((direction, row) => {
       const key = `${prefix}-${direction}`;
       if (this.anims.exists(key)) return;
@@ -872,6 +1095,7 @@ export class VillageScene extends Phaser.Scene {
       this.animals = [];
       if (companionCount < 1) return;
     }
+    if (!this.textures.exists(animalTextureKey(regionId))) return;
     this.animals = this.animals.filter((animal) => this.isSpriteAlive(animal));
     while (this.animals.length > companionCount) {
       const animal = this.animals.pop();
@@ -979,9 +1203,13 @@ export class VillageScene extends Phaser.Scene {
   }
 
   private startPlacement(building: VillageBuildingSpec) {
+    const regionId = this.state?.selectedRegion ?? this.initialRegion;
+    if (!this.ensureBuildingAsset(regionId, building, () => this.startPlacement(building))) {
+      this.emitToReact({ type: "notice", message: "건물 도면을 불러오는 중입니다." });
+      return;
+    }
     this.placement = building;
     this.preview?.destroy();
-    const regionId = this.state?.selectedRegion ?? this.initialRegion;
     this.preview = this.add
       .image(WORLD_W / 2, WORLD_H / 2, this.textureForBuilding(regionId, building))
       .setDisplaySize(168, 168)
@@ -1035,13 +1263,45 @@ export class VillageScene extends Phaser.Scene {
       this.floatText("완성!", world.x, world.y - 80);
       this.cancelPlacement();
     } else {
+      if (!this.isInBuildZone(world.x, world.y)) {
+        this.floatText("건설불가 지역", world.x, world.y - 70);
+        this.emitToReact({ type: "notice", message: "건설불가 지역입니다." });
+        this.cancelPlacement();
+        return;
+      }
       this.floatText("배치 불가", world.x, world.y - 70);
       this.emitToReact({ type: "notice", message: "그 위치에는 지을 수 없어요." });
     }
   }
 
+  private isInBuildZone(x: number, y: number) {
+    if (!this.state?.selectedRegion) return false;
+    const zones = this.tuning.buildZones[this.state.selectedRegion] ?? [];
+    if (zones.length > 0) return zones.some((zone) => this.isPointInRect(x, y, zone));
+    return x >= 150 && y >= 130 && x <= WORLD_W - 150 && y <= WORLD_H - 130;
+  }
+
+  private startVisitCrowdPatrol(sprite: Phaser.GameObjects.Sprite, regionId: RegionId, index: number) {
+    if (!this.isSpriteAlive(sprite) || !this.state?.isVisit || this.currentRegion() !== regionId) return;
+    const buildings = this.state.buildings;
+    const building = buildings[(index + Phaser.Math.Between(0, Math.max(0, buildings.length - 1))) % buildings.length];
+    const target = building
+      ? this.offsetFromBuilding(building.x, building.y, index % 2 === 0 ? -92 : 92, index % 3 === 0 ? 104 : 62)
+      : [900 + index * 120, 760] as [number, number];
+    this.moveSpriteOrthogonally(
+      sprite,
+      [target],
+      82,
+      (from, to) => this.safelyPlay(sprite, characterAnimationKey(regionId, "merchant", this.directionFromDelta(to[0] - from[0], to[1] - from[1]))),
+      () => this.time.delayedCall(700 + index * 160, () => this.startVisitCrowdPatrol(sprite, regionId, index)),
+    );
+  }
+
   private canPlaceAt(x: number, y: number) {
     if (!this.state) return false;
+    const isInMainFrontClearance =
+      y >= MAIN_BUILDING[1] && Phaser.Math.Distance.Between(x, y, MAIN_FRONT[0], MAIN_FRONT[1]) < MAIN_FRONT_CLEARANCE;
+    if (isInMainFrontClearance) return false;
     const zones = this.state.selectedRegion ? this.tuning.buildZones[this.state.selectedRegion] : undefined;
     if (zones?.length) {
       if (!zones.some((zone) => this.isPointInRect(x, y, zone))) return false;
@@ -1127,17 +1387,36 @@ export class VillageScene extends Phaser.Scene {
     return tiles.reverse();
   }
 
-  private animateMerchant(merchantId: string, target: RegionId) {
-    const sprite = this.merchants.get(merchantId);
-    if (!sprite) return;
-    const regionId = this.currentRegion();
-    const targetPoints: Record<RegionId, [number, number]> = {
+  private findVisitTrafficRoute(start: [number, number]): Array<[number, number]> {
+    const candidates: Array<[number, number]> = [
+      [MAIN_FRONT[0] + 420, MAIN_FRONT[1]], [MAIN_FRONT[0] - 420, MAIN_FRONT[1]],
+      [MAIN_FRONT[0], MAIN_FRONT[1] + 340], [MAIN_FRONT[0], MAIN_FRONT[1] - 340],
+      [MAIN_FRONT[0] + 520, MAIN_FRONT[1] + 260], [MAIN_FRONT[0] - 520, MAIN_FRONT[1] + 260],
+      [MAIN_FRONT[0] + 520, MAIN_FRONT[1] - 260], [MAIN_FRONT[0] - 520, MAIN_FRONT[1] - 260],
+    ];
+    for (const candidate of candidates) {
+      const route = this.findNavigationPath(start, candidate);
+      if (route && route.length >= 3) return route;
+    }
+    return [[MAIN_FRONT[0] + 360, MAIN_FRONT[1] + 220]];
+  }
+
+  private getMerchantDestination(target: RegionId): [number, number] {
+    const defaultDestinations: Record<RegionId, [number, number]> = {
       mountain: [330, 240],
       mine: [2050, 280],
       rural: [360, 1260],
       coast: [2070, 1230],
     };
-    const destination = this.tuning.merchantDestinations?.[target] ?? targetPoints[target];
+    const origin = this.currentRegion();
+    return this.tuning.merchantDestinations?.[origin]?.[target] ?? defaultDestinations[target];
+  }
+
+  private animateMerchant(merchantId: string, target: RegionId) {
+    const sprite = this.merchants.get(merchantId);
+    if (!sprite) return;
+    const regionId = this.currentRegion();
+    const destination = this.getMerchantDestination(target);
     const route = this.findNavigationPath(MAIN_FRONT, destination);
     if (!route) {
       this.emitToReact({ type: "notice", message: "상인이 갈 수 있는 길이 없습니다." });
@@ -1177,15 +1456,43 @@ export class VillageScene extends Phaser.Scene {
     );
   }
 
+  /**
+   * 광산 맵의 이동 불가 타일을 확인하기 위한 임시 시나리오입니다.
+   * 실제 교역 상인과 같은 findNavigationPath()를 사용하므로, 차단 타일을 통과하지 않습니다.
+   */
+  private runMineMerchantNavigationTest() {
+    if (this.mineMerchantTestStarted || this.currentRegion() !== "mine") return;
+    this.mineMerchantTestStarted = true;
+
+    (["mountain", "coast", "rural"] as RegionId[]).forEach((target, index) => {
+      this.time.delayedCall(index * 250, () => {
+        if (this.currentRegion() !== "mine") return;
+        const start: [number, number] = [MAIN_FRONT[0] + (index - 1) * 22, MAIN_FRONT[1]];
+        const route = this.findNavigationPath(start, this.getMerchantDestination(target));
+        if (!route) {
+          this.emitToReact({ type: "notice", message: `${regions[target].name} 방향으로 갈 수 있는 길이 없습니다.` });
+          return;
+        }
+        const merchant = this.add
+          .sprite(start[0], start[1], characterTextureKey("mine", "merchantCart"), 0)
+          .setScale(0.88)
+          .setDepth(100 + index);
+        this.moveSpriteOrthogonally(
+          merchant,
+          route,
+          MERCHANT_SPEED,
+          (from, to) => this.safelyPlay(merchant, characterAnimationKey("mine", "merchant-cart", this.directionFromDelta(to[0] - from[0], to[1] - from[1]))),
+          () => this.destroySprite(merchant),
+        );
+      });
+    });
+  }
+
   private animateAmbientMerchant(sprite: Phaser.GameObjects.Sprite, target: RegionId) {
     const regionId = this.currentRegion();
-    const targetPoints: Record<RegionId, [number, number]> = {
-      mountain: [330, 240],
-      mine: [2050, 280],
-      rural: [360, 1260],
-      coast: [2070, 1230],
-    };
-    const route = this.tuning.merchantRoutes[target]?.length ? this.tuning.merchantRoutes[target]! : [targetPoints[target]];
+    const destination = this.getMerchantDestination(target);
+    const route = this.findNavigationPath(MAIN_FRONT, destination) ?? (this.state?.isVisit ? this.findVisitTrafficRoute(MAIN_FRONT) : null);
+    if (!route) return;
     sprite.setData("ambient", true);
     sprite.setPosition(MAIN_FRONT[0], MAIN_FRONT[1]).setTexture(characterTextureKey(regionId, "merchantCart")).setScale(0.88).setAlpha(1);
     this.moveSpriteOrthogonally(
@@ -1194,16 +1501,19 @@ export class VillageScene extends Phaser.Scene {
       MERCHANT_SPEED * 0.85,
       (from, to) => this.safelyPlay(sprite, characterAnimationKey(regionId, "merchant-cart", this.directionFromDelta(to[0] - from[0], to[1] - from[1]))),
       () => {
-        const returnRoute = [...route].reverse();
         this.time.delayedCall(1200, () => {
           if (!this.isSpriteAlive(sprite)) return;
+          const returnRoute = this.findNavigationPath([sprite.x, sprite.y], MAIN_FRONT) ?? [MAIN_FRONT];
           this.moveSpriteOrthogonally(
             sprite,
-            [...returnRoute.slice(1), MAIN_FRONT],
+            returnRoute,
             MERCHANT_SPEED * 0.85,
             (from, to) => this.safelyPlay(sprite, characterAnimationKey(regionId, "merchant-cart", this.directionFromDelta(to[0] - from[0], to[1] - from[1]))),
             () => {
               sprite.setData("ambient", false);
+              this.time.delayedCall(700, () => {
+                if (this.state?.isVisit && this.isSpriteAlive(sprite)) this.animateAmbientMerchant(sprite, target);
+              });
             },
           );
         });
@@ -1213,15 +1523,11 @@ export class VillageScene extends Phaser.Scene {
 
   private animateProductWagon(target: RegionId, product: ProductId) {
     const regionId = this.currentRegion();
-    const targetPoints: Record<RegionId, [number, number]> = {
-      mountain: [330, 240],
-      mine: [2050, 280],
-      rural: [360, 1260],
-      coast: [2070, 1230],
-    };
-    const route = this.tuning.merchantRoutes[target]?.length ? this.tuning.merchantRoutes[target]! : [targetPoints[target]];
-    const returnRoute = [...route].reverse();
-    const outboundTarget = route[route.length - 1] ?? targetPoints[target];
+    if (!this.ensureProductWagonAsset(regionId, () => this.animateProductWagon(target, product))) return;
+    const destination = this.getMerchantDestination(target);
+    const route = this.findNavigationPath(MAIN_FRONT, destination) ?? (this.state?.isVisit ? this.findVisitTrafficRoute(MAIN_FRONT) : null);
+    if (!route) return;
+    const outboundTarget = route[route.length - 1] ?? destination;
     const sprite = this.add.sprite(MAIN_FRONT[0], MAIN_FRONT[1], characterTextureKey(regionId, "productWagon"), 0).setScale(0.94).setDepth(110);
     this.moveSpriteOrthogonally(
       sprite,
@@ -1233,9 +1539,10 @@ export class VillageScene extends Phaser.Scene {
         this.time.delayedCall(3800, () => {
           if (!this.isSpriteAlive(sprite)) return;
           sprite.setAlpha(1).setPosition(outboundTarget[0], outboundTarget[1]);
+          const returnRoute = this.findNavigationPath(outboundTarget, MAIN_FRONT) ?? [MAIN_FRONT];
           this.moveSpriteOrthogonally(
             sprite,
-            [...returnRoute.slice(1), MAIN_FRONT],
+            returnRoute,
             MERCHANT_SPEED * 0.78,
             (from, to) => this.safelyPlay(sprite, characterAnimationKey(regionId, "product-wagon", this.directionFromDelta(to[0] - from[0], to[1] - from[1]))),
             () => {
@@ -1308,9 +1615,12 @@ export class VillageScene extends Phaser.Scene {
 
     if (this.editMode?.mode === "worker" || this.editMode?.mode === "buildZone") return;
 
-    if (this.editMode?.target) {
-      const points = this.tuning.merchantRoutes[this.editMode.target] ?? [];
-      drawPoints([MAIN_FRONT, ...points], 0xf0b932);
+    if (this.editMode?.mode === "merchantDestination" && this.editMode.target) {
+      const [x, y] = this.getMerchantDestination(this.editMode.target);
+      graphics.fillStyle(0xf0b932, 1);
+      graphics.fillCircle(x, y, 17);
+      graphics.lineStyle(4, 0x3b210e, 1);
+      graphics.strokeCircle(x, y, 17);
     }
   }
 
@@ -1453,17 +1763,12 @@ export class VillageScene extends Phaser.Scene {
       this.routeGraphics!.fillRect(zone.x, zone.y, zone.width, zone.height);
       this.routeGraphics!.strokeRect(zone.x, zone.y, zone.width, zone.height);
     });
-    if (this.editMode?.target) {
-      const points = this.tuning.merchantRoutes[this.editMode.target] ?? [];
-      if (points.length > 0) {
-        const expanded = this.expandOrthogonalPath(MAIN_FRONT, points);
-        const linePoints = [MAIN_FRONT, ...expanded];
-        this.routeGraphics.lineStyle(6, 0xf0b932, 0.92);
-        this.routeGraphics.beginPath();
-        this.routeGraphics.moveTo(linePoints[0][0], linePoints[0][1]);
-        linePoints.slice(1).forEach(([x, y]) => this.routeGraphics?.lineTo(x, y));
-        this.routeGraphics.strokePath();
-      }
+    if (this.editMode?.mode === "merchantDestination" && this.editMode.target) {
+      const [x, y] = this.getMerchantDestination(this.editMode.target);
+      this.routeGraphics.fillStyle(0xf0b932, 1);
+      this.routeGraphics.fillCircle(x, y, 17);
+      this.routeGraphics.lineStyle(4, 0x3b210e, 1);
+      this.routeGraphics.strokeCircle(x, y, 17);
     }
   }
 

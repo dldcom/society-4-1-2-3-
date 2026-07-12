@@ -39,6 +39,10 @@ body,
   overflow: hidden;
   font-family: "DosStory", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
   color: var(--ink);
+  /* Keep Korean words together; only break an exceptionally long unspaced token when needed. */
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  line-break: strict;
 }
 
 button {
@@ -181,6 +185,34 @@ h1 {
   padding: 12px;
 }
 
+.restart-button {
+  position: absolute;
+  z-index: 8;
+  top: 14px;
+  right: 14px;
+  padding: 7px 11px;
+  border: 3px solid var(--wood-dark);
+  border-radius: 8px;
+  background: var(--button-fill);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow: var(--control-shadow);
+}
+
+.restart-button:hover {
+  filter: brightness(1.06);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+
 .hud strong {
   display: block;
   margin-bottom: 8px;
@@ -266,7 +298,7 @@ h1 {
 .mission-guide {
   position: absolute;
   z-index: 6;
-  top: 142px;
+  top: calc(14px + var(--hud-height, 140px) + 12px);
   left: 14px;
   width: min(360px, calc(100vw - 28px));
   padding: 10px 12px;
@@ -425,6 +457,63 @@ h1 {
   font-weight: 900;
   text-shadow: 0 3px 0 #2b170c;
   pointer-events: all;
+}
+
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: linear-gradient(rgba(43, 29, 15, 0.58), rgba(43, 29, 15, 0.72));
+  pointer-events: all;
+}
+
+.loading-card {
+  width: min(380px, 86vw);
+  padding: 26px 28px 22px;
+  text-align: center;
+  border: 7px solid #643b1b;
+  border-radius: 16px;
+  background: var(--paper-fill);
+  box-shadow: 0 5px 0 #2c190c, 0 14px 30px rgba(0, 0, 0, 0.3);
+}
+
+.loading-card strong,
+.loading-card span,
+.loading-card b {
+  display: block;
+}
+
+.loading-card strong {
+  font-size: 25px;
+}
+
+.loading-card span {
+  margin: 8px 0 17px;
+  color: var(--ink-soft);
+}
+
+.loading-track {
+  height: 20px;
+  overflow: hidden;
+  border: 3px solid var(--wood-dark);
+  border-radius: 999px;
+  background: #7d552e;
+  box-shadow: inset 0 2px 0 rgba(52, 27, 12, 0.42);
+}
+
+.loading-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: repeating-linear-gradient(90deg, #ffda64 0 14px, #f3b93c 14px 28px);
+  transition: width 0.16s ease-out;
+}
+
+.loading-card b {
+  margin-top: 10px;
+  color: #81501f;
 }
 
 .game-button,

@@ -2,15 +2,16 @@ import { useEffect, useRef } from "react";
 import Phaser from "phaser";
 import { VillageScene } from "./GameScene";
 import type { RegionId } from "./gameData";
-import type { SceneCommand, SceneEvent } from "./types";
+import type { GameState, SceneCommand, SceneEvent } from "./types";
 
 type Props = {
   regionId: RegionId;
   command?: SceneCommand;
+  initialState?: GameState;
   onEvent: (event: SceneEvent) => void;
 };
 
-export default function PhaserGame({ regionId, command, onEvent }: Props) {
+export default function PhaserGame({ regionId, command, initialState, onEvent }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
   const sceneRef = useRef<VillageScene | null>(null);
@@ -18,7 +19,7 @@ export default function PhaserGame({ regionId, command, onEvent }: Props) {
 
   useEffect(() => {
     if (!hostRef.current || gameRef.current) return;
-    const scene = new VillageScene(regionId, onEvent);
+    const scene = new VillageScene(regionId, onEvent, initialState);
     sceneRef.current = scene;
     gameRef.current = new Phaser.Game({
       type: Phaser.AUTO,
