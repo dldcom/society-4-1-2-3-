@@ -645,7 +645,7 @@ export default function App() {
   const [selectedMainBuilding, setSelectedMainBuilding] = useState(false);
   const [notice, setNotice] = useState("플레이할 지역을 고르세요.");
   const [commands, setCommands] = useState<QueuedSceneCommand[]>([]);
-  const [productionLeft, setProductionLeft] = useState(AUTO_PRODUCTION_SECONDS);
+  const [, setProductionLeft] = useState(AUTO_PRODUCTION_SECONDS);
   const [tradeMerchant, setTradeMerchant] = useState<string | null>(null);
   const [tradeTarget, setTradeTarget] = useState<RegionId | null>(null);
   const [tradeAmount, setTradeAmount] = useState(2);
@@ -1469,7 +1469,7 @@ export default function App() {
       <button className="restart-button" onClick={() => setModal("restart")}>다시하기</button>
       {modal !== "routes" && (
         <>
-          <Hud game={game} productionLeft={productionLeft} onHeightChange={updateHudHeight} />
+          <Hud game={game} onHeightChange={updateHudHeight} />
           <MissionGuide game={game} />
           <div className="action-bar">
             <button className={pulseBuildButton ? "game-button mission-pulse" : "game-button"} disabled={actionsLockedUntilFirstWorker} title={actionsLockedUntilFirstWorker ? "일꾼을 먼저 뽑아야 합니다." : undefined} onClick={() => setModal("build")}>
@@ -1958,7 +1958,7 @@ function LoadingOverlay({ progress }: { progress: number }) {
   );
 }
 
-function Hud({ game, productionLeft, onHeightChange }: { game: GameState; productionLeft: number; onHeightChange: (height: number) => void }) {
+function Hud({ game, onHeightChange }: { game: GameState; onHeightChange: (height: number) => void }) {
   const region = regions[game.selectedRegion!];
   const resourceItems: ItemId[] = ["grain", "seafood", "wood", "minerals"];
   const ownedProducts = productIds.filter((item) => game.resources[item] > 0);
@@ -1976,7 +1976,10 @@ function Hud({ game, productionLeft, onHeightChange }: { game: GameState; produc
 
   return (
     <section className="hud" ref={hudRef}>
-      <strong>{region.name}</strong>
+      <div className="hud-title-row">
+        <strong>{region.name} 자원</strong>
+        <span className="hud-development">발전도 {game.development}</span>
+      </div>
       <div className="resource-row primary-resources">
         {resourceItems.map((item) => (
           <span className={item === region.resource ? "resource-badge home-resource" : "resource-badge"} key={item}>
@@ -1994,13 +1997,6 @@ function Hud({ game, productionLeft, onHeightChange }: { game: GameState; produc
           ))}
         </div>
       )}
-      <div className="mini-status">
-        <span>일꾼 {game.workers}명</span>
-        <span>상인 {game.merchants.filter((m) => m.status === "idle").length}/{game.merchants.length}명</span>
-        <span>발전도 {game.development}</span>
-        <span>방문객 {visitorCountForDevelopment(game.development)}/8</span>
-        <span>자동 생산 {productionLeft}초</span>
-      </div>
     </section>
   );
 }
