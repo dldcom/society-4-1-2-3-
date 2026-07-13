@@ -19,6 +19,11 @@ const MIN_BUILDING_DISTANCE = 118;
 const MAIN_FRONT_CLEARANCE = 240;
 const WORKER_SCALE = 0.96;
 const PLAY_ZOOM = 1.14;
+const TABLET_PORTRAIT_PLAY_ZOOM = 0.9;
+const TABLET_LANDSCAPE_PLAY_ZOOM = 0.96;
+const MOBILE_MAX_WIDTH = 760;
+const TABLET_MAX_WIDTH = 1180;
+const COARSE_POINTER_TABLET_MAX_WIDTH = 1366;
 const MERCHANT_SPEED = 230;
 const WORKER_SPEED = 260;
 const ANIMAL_SPEED = 115;
@@ -447,7 +452,7 @@ export class VillageScene extends Phaser.Scene {
 
   create() {
     this.cameras.main.setBounds(0, 0, WORLD_W, WORLD_H);
-    this.cameras.main.setZoom(PLAY_ZOOM);
+    this.cameras.main.setZoom(this.playZoomForViewport());
     this.cameras.main.centerOn(WORLD_W / 2, WORLD_H / 2);
     this.createAnimations();
     this.bg = this.add
@@ -1668,12 +1673,22 @@ export class VillageScene extends Phaser.Scene {
       this.drawRouteGuide();
       return;
     }
-    this.cameras.main.setZoom(PLAY_ZOOM);
+    this.cameras.main.setZoom(this.playZoomForViewport());
     this.cameras.main.centerOn(
       Phaser.Math.Clamp(this.cameras.main.midPoint.x, 0, WORLD_W),
       Phaser.Math.Clamp(this.cameras.main.midPoint.y, 0, WORLD_H),
     );
     this.drawRouteGuide();
+  }
+
+  private playZoomForViewport() {
+    const width = this.cameras?.main?.width ?? this.scale.width;
+    const height = this.cameras?.main?.height ?? this.scale.height;
+    if (width <= MOBILE_MAX_WIDTH) return PLAY_ZOOM;
+    const hasCoarsePointer = typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
+    const isTablet = width <= TABLET_MAX_WIDTH || (hasCoarsePointer && width <= COARSE_POINTER_TABLET_MAX_WIDTH);
+    if (!isTablet) return PLAY_ZOOM;
+    return height > width ? TABLET_PORTRAIT_PLAY_ZOOM : TABLET_LANDSCAPE_PLAY_ZOOM;
   }
 
   private findNavigationPath(start: [number, number], destination: [number, number]) {
