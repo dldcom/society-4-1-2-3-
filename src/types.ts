@@ -15,6 +15,14 @@ export type Construction = {
   completesAt: number;
 };
 
+export type ProductCraftJob = {
+  buildingId: string;
+  productId: ProductId;
+  amount: number;
+  startedAt: number;
+  completesAt: number;
+};
+
 export type Merchant = {
   id: string;
   name: string;
@@ -53,11 +61,15 @@ export type GameState = {
   buildings: PlacedBuilding[];
   construction?: Construction;
   constructionQueue?: Construction[];
+  productCraft?: ProductCraftJob;
   companions?: Partial<Record<RegionId, boolean>>;
   companionCounts?: Partial<Record<RegionId, number>>;
   hasDog: boolean;
   stats: GameStats;
+  tradedRegions?: Partial<Record<RegionId, boolean>>;
+  neighborVisitCompleted?: boolean;
   repeatMission?: RepeatMission;
+  productCatalogUnlocked: boolean;
   success: boolean;
   isVisit?: boolean;
 };
@@ -90,6 +102,11 @@ export type SceneCommand =
   | { type: "merchantTravel"; merchantId: string; target: RegionId }
   | { type: "productWagonTravel"; target: RegionId; product: ProductId }
   | { type: "floatText"; text: string; x?: number; y?: number };
+
+export type QueuedSceneCommand = {
+  id: number;
+  command: SceneCommand;
+};
 
 export type SceneEvent =
   | { type: "assetLoading"; progress: number }

@@ -146,7 +146,7 @@ export const productSpecs: Record<ProductId, ProductSpec> = {
     region: "rural",
     name: productNames.ruralRiceSack,
     asset: "/assets/products/rural-rice-sack.png",
-    recipe: { grain: 2, wood: 1 },
+    recipe: { grain: 4, wood: 1 },
     use: "기본 식량 상품. 최종 건물 재료와 지역 교류에 씁니다.",
   },
   ruralVegetableBasket: {
@@ -154,7 +154,7 @@ export const productSpecs: Record<ProductId, ProductSpec> = {
     region: "rural",
     name: productNames.ruralVegetableBasket,
     asset: "/assets/products/rural-vegetable-basket.png",
-    recipe: { grain: 2, seafood: 1 },
+    recipe: { grain: 4, seafood: 2 },
     use: "일꾼과 마을을 돕는 신선한 식량 상품입니다.",
   },
   ruralFlourSack: {
@@ -162,7 +162,7 @@ export const productSpecs: Record<ProductId, ProductSpec> = {
     region: "rural",
     name: productNames.ruralFlourSack,
     asset: "/assets/products/rural-flour-sack.png",
-    recipe: { grain: 3, minerals: 1 },
+    recipe: { grain: 5, minerals: 2 },
     use: "가공 식품과 다른 지역 제작 재료로 쓰기 좋습니다.",
   },
   ruralFruitCrate: {
@@ -170,7 +170,7 @@ export const productSpecs: Record<ProductId, ProductSpec> = {
     region: "rural",
     name: productNames.ruralFruitCrate,
     asset: "/assets/products/rural-fruit-crate.png",
-    recipe: { grain: 2, wood: 1, seafood: 1 },
+    recipe: { grain: 5, wood: 1, seafood: 2 },
     use: "교류 보상과 장터 건물 재료로 어울리는 상품입니다.",
   },
   mountainLumberBundle: {
@@ -178,7 +178,7 @@ export const productSpecs: Record<ProductId, ProductSpec> = {
     region: "mountain",
     name: productNames.mountainLumberBundle,
     asset: "/assets/products/mountain-lumber-bundle.png",
-    recipe: { wood: 2, minerals: 1 },
+    recipe: { wood: 4, minerals: 1 },
     use: "기본 산지 상품. 최종 건물 재료와 건설 재료로 씁니다.",
   },
   mountainHerbBasket: {
@@ -186,7 +186,7 @@ export const productSpecs: Record<ProductId, ProductSpec> = {
     region: "mountain",
     name: productNames.mountainHerbBasket,
     asset: "/assets/products/mountain-herb-basket.png",
-    recipe: { wood: 2, grain: 1 },
+    recipe: { wood: 4, grain: 2 },
     use: "동물 친구와 일꾼을 돕는 자연 상품입니다.",
   },
   mountainMushroomBox: {
@@ -194,7 +194,7 @@ export const productSpecs: Record<ProductId, ProductSpec> = {
     region: "mountain",
     name: productNames.mountainMushroomBox,
     asset: "/assets/products/mountain-mushroom-box.png",
-    recipe: { wood: 2, seafood: 1 },
+    recipe: { wood: 5, seafood: 2 },
     use: "식량 교류와 제작 재료 사이를 이어주는 상품입니다.",
   },
   mountainHoneyJar: {
@@ -202,7 +202,7 @@ export const productSpecs: Record<ProductId, ProductSpec> = {
     region: "mountain",
     name: productNames.mountainHoneyJar,
     asset: "/assets/products/mountain-honey-jar.png",
-    recipe: { wood: 2, grain: 1, seafood: 1 },
+    recipe: { wood: 5, grain: 1, seafood: 2 },
     use: "가치가 높은 산지 선물 상품입니다.",
   },
   coastFishCrate: {
@@ -210,7 +210,7 @@ export const productSpecs: Record<ProductId, ProductSpec> = {
     region: "coast",
     name: productNames.coastFishCrate,
     asset: "/assets/products/coast-fish-crate.png",
-    recipe: { seafood: 2, wood: 1 },
+    recipe: { seafood: 4, wood: 1 },
     use: "기본 어촌 상품. 최종 건물 재료와 지역 교류에 씁니다.",
   },
   coastSaltPouch: {
@@ -218,7 +218,7 @@ export const productSpecs: Record<ProductId, ProductSpec> = {
     region: "coast",
     name: productNames.coastSaltPouch,
     asset: "/assets/products/coast-salt-pouch.png",
-    recipe: { seafood: 2, minerals: 1 },
+    recipe: { seafood: 4, minerals: 2 },
     use: "보관과 운반에 도움을 주는 바다 상품입니다.",
   },
   coastSeaweedBundle: {
@@ -226,7 +226,7 @@ export const productSpecs: Record<ProductId, ProductSpec> = {
     region: "coast",
     name: productNames.coastSeaweedBundle,
     asset: "/assets/products/coast-seaweed-bundle.png",
-    recipe: { seafood: 2, grain: 1 },
+    recipe: { seafood: 5, grain: 2 },
     use: "식량 상품과 교환하기 좋은 어촌 특산품입니다.",
   },
   coastShellfishBasket: {
@@ -234,7 +234,7 @@ export const productSpecs: Record<ProductId, ProductSpec> = {
     region: "coast",
     name: productNames.coastShellfishBasket,
     asset: "/assets/products/coast-shellfish-basket.png",
-    recipe: { seafood: 2, wood: 1, minerals: 1 },
+    recipe: { seafood: 5, wood: 1, minerals: 2 },
     use: "가치가 높은 바다 선물 상품입니다.",
   },
   mineIronOreBox: {
@@ -242,7 +242,7 @@ export const productSpecs: Record<ProductId, ProductSpec> = {
     region: "mine",
     name: productNames.mineIronOreBox,
     asset: "/assets/products/mine-iron-ore-box.png",
-    recipe: { minerals: 2, wood: 1 },
+    recipe: { minerals: 4, wood: 1 },
     use: "기본 광산 상품. 최종 건물 재료와 제작 재료로 씁니다.",
   },
   mineToolBox: {
@@ -250,7 +250,7 @@ export const productSpecs: Record<ProductId, ProductSpec> = {
     region: "mine",
     name: productNames.mineToolBox,
     asset: "/assets/products/mine-tool-box.png",
-    recipe: { minerals: 2, wood: 1, grain: 1 },
+    recipe: { minerals: 4, wood: 1, grain: 1 },
     use: "건설과 제작을 돕는 실용 상품입니다.",
   },
   mineCoalSack: {
@@ -258,7 +258,7 @@ export const productSpecs: Record<ProductId, ProductSpec> = {
     region: "mine",
     name: productNames.mineCoalSack,
     asset: "/assets/products/mine-coal-sack.png",
-    recipe: { minerals: 2, seafood: 1 },
+    recipe: { minerals: 5, seafood: 2 },
     use: "가공소와 작업장에 어울리는 연료 상품입니다.",
   },
   mineCogwheelParts: {
@@ -266,7 +266,7 @@ export const productSpecs: Record<ProductId, ProductSpec> = {
     region: "mine",
     name: productNames.mineCogwheelParts,
     asset: "/assets/products/mine-cogwheel-parts.png",
-    recipe: { minerals: 3, wood: 1 },
+    recipe: { minerals: 5, wood: 3 },
     use: "고급 건물과 기계 장치에 쓰는 부품 상품입니다.",
   },
 };
@@ -477,12 +477,15 @@ const primaryProductByRegion: Record<RegionId, ProductId> = {
 };
 
 const productFinalCost = (ownRegion: RegionId, ownResource: ResourceId): Partial<Record<ItemId, number>> => ({
-  [ownResource]: 8,
-  [primaryProductByRegion[ownRegion]]: 2,
+  [ownResource]: 95,
+  ...Object.fromEntries(
+    (["grain", "seafood", "wood", "minerals"] as ResourceId[])
+      .filter((resource) => resource !== ownResource)
+      .map((resource) => [resource, 20]),
+  ),
   ...Object.fromEntries(
     Object.entries(primaryProductByRegion)
-      .filter(([region]) => region !== ownRegion)
-      .map(([, product]) => [product, 1]),
+      .map(([, product]) => [product, 2]),
   ),
 });
 
@@ -572,6 +575,47 @@ export const regions: Record<RegionId, RegionSpec> = {
     ],
   },
 };
+
+const balancedBuildingCosts: Record<RegionId, Array<Partial<Record<ItemId, number>>>> = {
+  mountain: [
+    { wood: 2 },
+    { wood: 18, minerals: 2 },
+    { wood: 32, grain: 6, minerals: 6, seafood: 6 },
+    { wood: 48, grain: 10, minerals: 10, seafood: 10 },
+    { wood: 70, grain: 15, minerals: 15, seafood: 15, mountainLumberBundle: 2 },
+    productFinalCost("mountain", "wood"),
+  ],
+  mine: [
+    { minerals: 2 },
+    { minerals: 18, grain: 2 },
+    { minerals: 32, grain: 6, seafood: 6, wood: 6 },
+    { minerals: 48, grain: 10, seafood: 10, wood: 10 },
+    { minerals: 70, grain: 15, seafood: 15, wood: 15, mineIronOreBox: 2 },
+    productFinalCost("mine", "minerals"),
+  ],
+  rural: [
+    { grain: 2 },
+    { grain: 18, seafood: 2 },
+    { grain: 32, seafood: 6, wood: 6, minerals: 6 },
+    { grain: 48, seafood: 10, wood: 10, minerals: 10 },
+    { grain: 70, seafood: 15, wood: 15, minerals: 15, ruralRiceSack: 2 },
+    productFinalCost("rural", "grain"),
+  ],
+  coast: [
+    { seafood: 2 },
+    { seafood: 18, wood: 2 },
+    { seafood: 32, grain: 6, wood: 6, minerals: 6 },
+    { seafood: 48, grain: 10, wood: 10, minerals: 10 },
+    { seafood: 70, grain: 15, wood: 15, minerals: 15, coastFishCrate: 2 },
+    productFinalCost("coast", "seafood"),
+  ],
+};
+
+Object.entries(balancedBuildingCosts).forEach(([regionId, costs]) => {
+  regions[regionId as RegionId].buildings.forEach((building, index) => {
+    building.cost = costs[index] ?? building.cost;
+  });
+});
 
 export const regionList = Object.values(regions);
 

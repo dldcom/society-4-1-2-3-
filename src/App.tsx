@@ -20,9 +20,10 @@ import {
   type ItemId,
   type ProductId,
   type RegionId,
+  type ResourceId,
   type VillageBuildingSpec,
 } from "./gameData";
-import type { GameState, Merchant, PlacedBuilding, RepeatMission, RouteTuning, SceneCommand, SceneEvent } from "./types";
+import type { GameState, Merchant, PlacedBuilding, QueuedSceneCommand, RepeatMission, RouteTuning, SceneCommand, SceneEvent } from "./types";
 
 const emptyResources = () =>
   Object.fromEntries(allItems.map((item) => [item, 0])) as Record<ItemId, number>;
@@ -32,18 +33,31 @@ const canPay = (resources: Record<ItemId, number>, cost: Partial<Record<ItemId, 
 
 const TRADE_MIN_AMOUNT = 2;
 const TRADE_STEP = 2;
-const TRADE_MAX_AMOUNT = 10;
-const AUTO_PRODUCTION_SECONDS = 15;
+const TRADE_MAX_AMOUNT = 20;
+const AUTO_PRODUCTION_SECONDS = 5;
+const COMPANION_AUTO_BONUS_CHANCE = 0.15;
 const GAME_SAVE_KEY = "four-region-exchange-village-game";
+const STARTING_HOME_RESOURCE = 6;
 const MAX_WORKERS = 4;
 const WORKER_BASE_COST = 6;
 const WORKER_COST_STEP = 4;
+const FIRST_STAGE_REWARD = 4;
+const VISITOR_DEVELOPMENT_THRESHOLDS = Array.from({ length: 8 }, (_, index) => (index + 1) * 40);
+const PRODUCT_TRADE_DEVELOPMENT = 10;
 const BUILD_STATUS_READY = "건설 가능";
 const BUILD_STATUS_DONE = "완성";
 const BUILD_STATUS_LOCKED = "잠김";
 const BUILD_STATUS_MISSING = "자원 부족";
 const BUILD_STATUS_IN_PROGRESS = "공사 중";
 const BUILD_DURATION_MS = 5000;
+const PRODUCT_CRAFT_DURATION_MS = 3000;
+const PRODUCT_CRAFT_MAX_AMOUNT = 5;
+const merchantPortraitAssets: Record<RegionId, string> = {
+  rural: "/assets/merchants/merchant-walk-4x4.webp",
+  mountain: "/assets/merchants/mountain-merchant-walk-4x4.png",
+  mine: "/assets/merchants/mine-merchant-walk-4x4.png",
+  coast: "/assets/merchants/coast-merchant-walk-4x4.png",
+};
 const NORMAL_BUILDING_MAX_COPIES: Record<number, number> = {
   1: 3,
   2: 2,
@@ -58,8 +72,16 @@ const maxTradeAmount = (game: GameState, regionId: RegionId) =>
 
 const workerRecruitCost = (workers: number) => WORKER_BASE_COST + Math.max(0, workers - 1) * WORKER_COST_STEP;
 
-const autoProductionAmount = (game: GameState) =>
-  1 + Math.floor(Math.max(0, game.workers - 1) / 2) + game.autoBonus;
+const workerRecruitResource = (game: GameState) =>
+  game.selectedRegion ? regions[game.selectedRegion].resource : "grain";
+
+const unlockedProductChoices = (game: GameState, regionId: RegionId) =>
+  game.productCatalogUnlocked ? regions[regionId].products : [regions[regionId].product];
+
+const autoProductionAmount = (game: GameState) => game.workers + game.autoBonus;
+
+const visitorCountForDevelopment = (development: number) =>
+  VISITOR_DEVELOPMENT_THRESHOLDS.filter((threshold) => development >= threshold).length;
 
 const normalBuildings = (game: GameState) =>
   game.buildings.filter((building) => !isFeatureBuilding(building.spec));
@@ -97,6 +119,21 @@ const payCost = (resources: Record<ItemId, number>, cost: Partial<Record<ItemId,
     next[item as ItemId] -= amount ?? 0;
   });
   return next;
+};
+
+const multiplyCost = (cost: Partial<Record<ItemId, number>>, amount: number) =>
+  Object.fromEntries(
+    Object.entries(cost).map(([item, itemAmount]) => [item, (itemAmount ?? 0) * amount]),
+  ) as Partial<Record<ItemId, number>>;
+
+const maxCraftableAmount = (
+  resources: Record<ItemId, number>,
+  cost: Partial<Record<ItemId, number>>,
+) => {
+  const limits = Object.entries(cost)
+    .filter(([, amount]) => (amount ?? 0) > 0)
+    .map(([item, amount]) => Math.floor(resources[item as ItemId] / (amount ?? 1)));
+  return Math.min(PRODUCT_CRAFT_MAX_AMOUNT, ...(limits.length ? limits : [0]));
 };
 
 const emptyCompanions = (): Partial<Record<RegionId, boolean>> => ({
@@ -146,11 +183,18 @@ type MissionStep = {
   title: string;
   detail: string;
   progress: string;
+  target?: RegionId;
 };
 
 type MissionDialogState = {
   kind: "next" | "complete";
   mission: MissionStep;
+};
+
+type TradeResultDialogState = {
+  target: RegionId;
+  resource: ResourceId;
+  amount: number;
 };
 
 const createRepeatMission = (game: GameState, previous?: RepeatMission): RepeatMission | undefined => {
@@ -161,7 +205,9 @@ const createRepeatMission = (game: GameState, previous?: RepeatMission): RepeatM
     ...targets.map((target) => ({ kind: "productTrade" as const, target, goal: 1 })),
     ...targets.map((target) => ({ kind: "resourceTrade" as const, target, goal: 2 })),
   ];
-  const alternatives = candidates.filter((candidate) => candidate.kind !== previous?.kind && candidate.target !== previous.target);
+  const alternatives = previous
+    ? candidates.filter((candidate) => candidate.kind !== previous.kind || candidate.target !== previous.target)
+    : candidates;
   const selected = alternatives[Math.floor(Math.random() * alternatives.length)] ?? candidates[0];
   return { ...selected, id: `repeat-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, progress: 0 };
 };
@@ -195,6 +241,15 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
   const fourthBuilding = region.buildings[3];
   const fifthBuilding = region.buildings[4];
   const finalBuilding = region.buildings[5];
+  const tradeTargets = regionList
+    .filter((target) => target.id !== game.selectedRegion)
+    .sort((left, right) => {
+      const leftNeeded = secondBuilding.cost[left.resource] ? 1 : 0;
+      const rightNeeded = secondBuilding.cost[right.resource] ? 1 : 0;
+      return rightNeeded - leftNeeded;
+    });
+  const [firstTradeTarget, ...laterTradeTargets] = tradeTargets;
+  const tradedRegions = game.tradedRegions ?? {};
 
   const hasMerchant = game.merchants.length > 0;
   const hasCompanion = hasRegionCompanion(game, game.selectedRegion);
@@ -206,11 +261,12 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
   const classroomSuccess = game.stats.trades >= 1 && game.stats.crafts >= 1;
 
   if (game.workers < 1) {
+    const workerResource = workerRecruitResource(game);
     return {
       id: "recruit-first-worker",
       title: "일꾼 뽑기",
-      detail: `마을 본부를 눌러 곡식 ${workerRecruitCost(game.workers)}개로 첫 일꾼을 뽑으세요.`,
-      progress: "1/12",
+      detail: `마을 본부를 눌러 ${resourceNames[workerResource]} ${workerRecruitCost(game.workers)}개로 첫 일꾼을 뽑으세요.`,
+      progress: "1/16",
     };
   }
 
@@ -219,7 +275,7 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "build-stage-1",
       title: `${firstBuilding.name} 짓기`,
       detail: `${resourceNames[region.resource]} ${firstBuilding.cost[region.resource] ?? 3}개를 모아 첫 건물을 지으세요.`,
-      progress: "2/12",
+      progress: "2/16",
     };
   }
 
@@ -228,16 +284,27 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "recruit-merchant",
       title: "상인 뽑기",
       detail: `1단계 건물(${firstBuilding.name})을 눌러 상인을 뽑으세요.`,
-      progress: "3/12",
+      progress: "3/16",
     };
   }
 
-  if (game.stats.trades < 1) {
+  if (game.workers < 2) {
+    const workerResource = workerRecruitResource(game);
     return {
-      id: "trade-resource",
-      title: "부족한 자원 교류하기",
-      detail: "교류하기를 눌러 다른 지역 자원을 받아오세요.",
-      progress: "4/12",
+      id: "recruit-second-worker",
+      title: "일꾼 한 명 더 뽑기",
+      detail: `마을 본부를 눌러 ${resourceNames[workerResource]} ${workerRecruitCost(game.workers)}개로 일꾼을 한 명 더 뽑으세요.`,
+      progress: "4/16",
+    };
+  }
+
+  if (firstTradeTarget && !tradedRegions[firstTradeTarget.id]) {
+    return {
+      id: `trade-resource-${firstTradeTarget.id}`,
+      title: `${firstTradeTarget.name}과 교류하기`,
+      detail: `상인을 보내 ${firstTradeTarget.name}에서 ${resourceNames[firstTradeTarget.resource]}을 받아오세요.`,
+      progress: "5/16",
+      target: firstTradeTarget.id,
     };
   }
 
@@ -246,7 +313,7 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "build-stage-2",
       title: `${secondBuilding.name} 짓기`,
       detail: "자원을 더 모아 2단계 건물을 지으세요.",
-      progress: "5/12",
+      progress: "6/16",
     };
   }
 
@@ -255,7 +322,19 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "adopt-companion",
       title: companionSpecs[game.selectedRegion].action,
       detail: `2단계 건물을 눌러 ${companionSpecs[game.selectedRegion].name}을 만나세요.`,
-      progress: "6/12",
+      progress: "7/16",
+    };
+  }
+
+  const nextLaterTradeIndex = laterTradeTargets.findIndex((target) => !tradedRegions[target.id]);
+  if (nextLaterTradeIndex >= 0) {
+    const target = laterTradeTargets[nextLaterTradeIndex];
+    return {
+      id: `trade-resource-${target.id}`,
+      title: `${target.name}과 교류하기`,
+      detail: `상인을 보내 ${target.name}에서 ${resourceNames[target.resource]}을 받아오세요.`,
+      progress: `${8 + nextLaterTradeIndex}/16`,
+      target: target.id,
     };
   }
 
@@ -264,7 +343,16 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "build-stage-3",
       title: `${thirdBuilding.name} 짓기`,
       detail: "3단계 건물을 지으면 이웃 마을을 구경할 수 있어요.",
-      progress: "7/12",
+      progress: "10/16",
+    };
+  }
+
+  if (!game.neighborVisitCompleted) {
+    return {
+      id: "visit-neighbor",
+      title: "이웃 마을 구경하기",
+      detail: "원하는 이웃 지역을 방문해 마을을 구경하세요.",
+      progress: "11/16",
     };
   }
 
@@ -272,8 +360,8 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
     return {
       id: "build-stage-4",
       title: `${fourthBuilding.name} 짓기`,
-      detail: "이웃 마을을 구경해 보고, 4단계 건물을 지어 대표 상품 만들기를 여세요.",
-      progress: "8/12",
+      detail: "4단계 건물을 지어 대표 상품 만들기를 여세요.",
+      progress: "12/16",
     };
   }
 
@@ -282,7 +370,7 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "craft-product",
       title: `${region.productName} 만들기`,
       detail: `4단계 건물(${fourthBuilding.name})을 눌러 ${region.shortName} 대표 상품을 만드세요.`,
-      progress: "9/12",
+      progress: "13/16",
     };
   }
 
@@ -300,7 +388,7 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "build-stage-5",
       title: `${fifthBuilding.name} 짓기`,
       detail: "5단계 건물을 지으면 상품을 다른 지역으로 보낼 수 있어요.",
-      progress: "10/12",
+      progress: "14/16",
     };
   }
 
@@ -309,7 +397,7 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "trade-product",
       title: "상품 보내기",
       detail: "5단계 건물을 눌러 다른 지역으로 대표 상품을 보내보세요.",
-      progress: "11/12",
+      progress: "15/16",
     };
   }
 
@@ -336,7 +424,18 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
       id: "final-building",
       title: `${finalBuilding.name} 완성하기`,
       detail: "마지막 6단계 건물을 지어 마을을 완성하세요.",
-      progress: "12/12",
+      progress: "16/16",
+    };
+  }
+
+  if (!game.success) return null;
+
+  if (!game.productCatalogUnlocked) {
+    return {
+      id: "hidden-product-catalog",
+      title: "히든 퀘스트: 대표 상품 발견",
+      detail: "6단계 건물을 눌러 지역의 나머지 대표 상품을 열어보세요.",
+      progress: "히든",
     };
   }
 
@@ -372,9 +471,7 @@ const getCurrentMission = (game: GameState): MissionStep | null => {
 
 const makeInitialState = (regionId: RegionId): GameState => {
   const resources = emptyResources();
-  (["grain", "seafood", "wood", "minerals"] as ItemId[]).forEach((item) => {
-    resources[item] = 50;
-  });
+  resources[regions[regionId].resource] = STARTING_HOME_RESOURCE;
   return {
     selectedRegion: regionId,
     resources,
@@ -391,6 +488,9 @@ const makeInitialState = (regionId: RegionId): GameState => {
     companionCounts: {},
     hasDog: false,
     stats: { trades: 0, productTrades: 0, crafts: 0 },
+    tradedRegions: {},
+    neighborVisitCompleted: false,
+    productCatalogUnlocked: false,
     success: false,
   };
 };
@@ -400,13 +500,21 @@ const loadSavedGame = (): GameState | null => {
     const raw = window.localStorage.getItem(GAME_SAVE_KEY);
     if (!raw) return null;
     const saved = JSON.parse(raw) as GameState;
-    return saved.selectedRegion && regions[saved.selectedRegion] ? { ...saved, success: false } : null;
+    return saved.selectedRegion && regions[saved.selectedRegion]
+      ? {
+          ...saved,
+          tradedRegions: saved.tradedRegions ?? {},
+          neighborVisitCompleted: Boolean(saved.neighborVisitCompleted),
+          productCatalogUnlocked: Boolean(saved.productCatalogUnlocked || saved.featureBuildings?.length),
+          success: Boolean(saved.success),
+        }
+      : null;
   } catch {
     return null;
   }
 };
 
-type Modal = "build" | "trade" | "visit" | "craftProduct" | "productTrade" | "routes" | "restart" | null;
+type Modal = "build" | "trade" | "visit" | "craftProduct" | "craftResult" | "productTrade" | "routes" | "restart" | null;
 
 const emptyTuning = (): RouteTuning => ({ workerSpots: {}, merchantRoutes: {}, workerSpawns: {}, merchantDestinations: {}, blockedTiles: {}, buildZones: {} });
 
@@ -481,6 +589,7 @@ const makeVisitState = (base: GameState, regionId: RegionId, tuning: RouteTuning
     featureBuildings: base.featureBuildings ?? [],
     construction: undefined,
     constructionQueue: [],
+    productCraft: undefined,
     merchants: Array.from({ length: 3 }, (_, index) => ({
       id: `visit-merchant-${regionId}-${index}`,
       name: `상인${index + 1}`,
@@ -535,7 +644,7 @@ export default function App() {
   const [selectedBuildingId, setSelectedBuildingId] = useState<string | null>(null);
   const [selectedMainBuilding, setSelectedMainBuilding] = useState(false);
   const [notice, setNotice] = useState("플레이할 지역을 고르세요.");
-  const [command, setCommand] = useState<SceneCommand>();
+  const [commands, setCommands] = useState<QueuedSceneCommand[]>([]);
   const [productionLeft, setProductionLeft] = useState(AUTO_PRODUCTION_SECONDS);
   const [tradeMerchant, setTradeMerchant] = useState<string | null>(null);
   const [tradeTarget, setTradeTarget] = useState<RegionId | null>(null);
@@ -545,23 +654,31 @@ export default function App() {
   const [assetLoading, setAssetLoading] = useState(() => ({ active: Boolean(game), progress: 0 }));
   const [hudHeight, setHudHeight] = useState(140);
   const [craftProductId, setCraftProductId] = useState<ProductId | null>(null);
+  const [craftAmount, setCraftAmount] = useState(1);
+  const [craftResult, setCraftResult] = useState<{ productId: ProductId; amount: number } | null>(null);
   const [sendProductId, setSendProductId] = useState<ProductId | null>(null);
   const [productTradeTarget, setProductTradeTarget] = useState<RegionId | null>(null);
   const [receiveProductId, setReceiveProductId] = useState<ProductId | null>(null);
   const [selectedBuildStage, setSelectedBuildStage] = useState<number | null>(null);
   const [missionDialog, setMissionDialog] = useState<MissionDialogState | null>(null);
+  const [tradeResultDialog, setTradeResultDialog] = useState<TradeResultDialogState | null>(null);
+  const [mainCompletionStep, setMainCompletionStep] = useState<"celebration" | "result" | null>(null);
   const gameRef = useRef<GameState | null>(null);
   const editModeRef = useRef<typeof editMode>(null);
   const visitRegionRef = useRef<RegionId | null>(null);
   const sceneBusyRef = useRef(false);
   const transitionTargetRef = useRef<RegionId | null>(null);
   const previousMissionRef = useRef<MissionStep | null>(null);
+  const nextCommandIdRef = useRef(0);
 
   const selectedRegion = game?.selectedRegion ? regions[game.selectedRegion] : null;
   const selectedBuilding = game?.buildings.find((building) => building.id === selectedBuildingId) ?? null;
   const sceneGame = useMemo(() => (game && visitRegion ? makeVisitState(game, visitRegion, tuning) : game), [game, visitRegion, tuning]);
 
-  const pushCommand = useCallback((next: SceneCommand) => setCommand({ ...next }), []);
+  const pushCommand = useCallback((next: SceneCommand) => {
+    const queued = { id: ++nextCommandIdRef.current, command: next };
+    setCommands((current) => [...current, queued].slice(-100));
+  }, []);
   const updateHudHeight = useCallback((height: number) => {
     setHudHeight((current) => current === height ? current : height);
   }, []);
@@ -588,6 +705,13 @@ export default function App() {
   }, [game]);
 
   useEffect(() => {
+    if (!game || game.builtStage < 6 || game.success || mainCompletionStep) return;
+    setMissionDialog(null);
+    setTradeResultDialog(null);
+    setMainCompletionStep("celebration");
+  }, [game, mainCompletionStep]);
+
+  useEffect(() => {
     pushCommand({ type: "setEditMode", mode: editMode?.mode ?? null, target: editMode?.target });
   }, [editMode, pushCommand]);
 
@@ -601,6 +725,7 @@ export default function App() {
       setMissionDialog(null);
       return;
     }
+    if (craftResult) return;
     const mission = getCurrentMission(game);
     if (!mission) return;
     const previousMission = previousMissionRef.current;
@@ -613,7 +738,7 @@ export default function App() {
     if (previousMission.id !== mission.id) {
       setMissionDialog({ kind: "complete", mission: previousMission });
     }
-  }, [game]);
+  }, [game, craftResult]);
 
   useEffect(() => {
     if (!game?.selectedRegion || game.builtStage < 6 || game.repeatMission) return;
@@ -634,7 +759,7 @@ export default function App() {
           const resources = { ...current.resources };
           let bonus = 0;
           resources[region.resource] += amount;
-          if (hasRegionCompanion(current, current.selectedRegion) && Math.random() < 0.45) {
+          if (hasRegionCompanion(current, current.selectedRegion) && Math.random() < COMPANION_AUTO_BONUS_CHANCE) {
             resources[region.resource] += 1;
             bonus += 1;
           }
@@ -644,13 +769,36 @@ export default function App() {
               : `자동 +${amount} ${resourceNames[region.resource]}`;
           setNotice(message);
           pushCommand({ type: "floatText", text: message });
-          return { ...current, resources, development: current.development + 1 };
+          return { ...current, resources };
         });
         return AUTO_PRODUCTION_SECONDS;
       });
     }, 1000);
     return () => window.clearInterval(timer);
   }, [game, pushCommand]);
+
+  useEffect(() => {
+    if (!game?.productCraft) return;
+    const expectedJob = game.productCraft;
+    const timer = window.setTimeout(() => {
+      setGame((current) => {
+        const job = current?.productCraft;
+        if (!current || !job || job.startedAt !== expectedJob.startedAt) return current;
+        const resources = { ...current.resources, [job.productId]: current.resources[job.productId] + job.amount };
+        setCraftResult({ productId: job.productId, amount: job.amount });
+        setModal("craftResult");
+        setNotice(`${productNames[job.productId]} ${job.amount}개를 만들었어요.`);
+        return advanceRepeatMission({
+          ...current,
+          resources,
+          productCraft: undefined,
+          stats: { ...current.stats, crafts: current.stats.crafts + job.amount },
+          development: current.development + 4 * job.amount,
+        }, "craft");
+      });
+    }, Math.max(0, expectedJob.completesAt - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [game?.productCraft?.startedAt, game?.productCraft?.completesAt]);
 
   const handleSceneEvent = useCallback((event: SceneEvent) => {
     if (event.type === "assetLoading") {
@@ -674,6 +822,10 @@ export default function App() {
     }
     if (event.type === "selectBuilding") {
       if (visitRegionRef.current || sceneBusyRef.current) return;
+      if (gameRef.current?.productCraft?.buildingId === event.buildingId) {
+        setNotice("이 건물은 상품을 만드는 중이에요.");
+        return;
+      }
       setSelectedBuildingId(event.buildingId);
       setSelectedMainBuilding(false);
       return;
@@ -746,6 +898,13 @@ export default function App() {
         const resources = { ...current.resources };
         resources[merchant.receiveResource] += merchant.receiveAmount;
         setNotice(`${merchant.name}이 ${resourceNames[merchant.receiveResource]} ${merchant.receiveAmount}개를 가져왔어요.`);
+        if (tradeTarget) {
+          setTradeResultDialog({
+            target: tradeTarget,
+            resource: merchant.receiveResource,
+            amount: merchant.receiveAmount,
+          });
+        }
         pushCommand({ type: "floatText", text: `+${merchant.receiveAmount} ${resourceNames[merchant.receiveResource]}` });
         return advanceRepeatMission({
           ...current,
@@ -756,6 +915,9 @@ export default function App() {
               : item,
           ),
           stats: { ...current.stats, trades: current.stats.trades + 1 },
+          tradedRegions: tradeTarget
+            ? { ...(current.tradedRegions ?? {}), [tradeTarget]: true }
+            : current.tradedRegions,
           development: current.development + 4,
         }, "resourceTrade", tradeTarget);
       });
@@ -767,13 +929,19 @@ export default function App() {
         const resources = { ...current.resources };
         resources[event.product] += 1;
         const bonusDevelopment = hasFeatureEffect(current, "trade") ? 2 : 0;
-        setNotice(`${regions[event.target].name}에서 ${productNames[event.product]}을 가져왔어요.`);
+        const nextDevelopment = current.development + PRODUCT_TRADE_DEVELOPMENT + bonusDevelopment;
+        const newVisitorArrived = visitorCountForDevelopment(nextDevelopment) > visitorCountForDevelopment(current.development);
+        setNotice(
+          newVisitorArrived
+            ? `${productNames[event.product]} 교류로 마을이 알려져 새 방문객이 찾아왔어요!`
+            : `${regions[event.target].name}에서 ${productNames[event.product]}을 가져왔어요. 발전도 +${PRODUCT_TRADE_DEVELOPMENT + bonusDevelopment}`,
+        );
         pushCommand({ type: "floatText", text: `+1 ${productNames[event.product]}` });
         return advanceRepeatMission({
           ...current,
           resources,
           stats: { ...current.stats, productTrades: current.stats.productTrades + 1 },
-          development: current.development + 5 + bonusDevelopment,
+          development: nextDevelopment,
         }, "productTrade", event.target);
       });
       return;
@@ -881,6 +1049,13 @@ export default function App() {
     setMissionDialog(null);
   };
 
+  const acknowledgeMainResult = () => {
+    previousMissionRef.current = null;
+    setMissionDialog(null);
+    setMainCompletionStep(null);
+    setGame((current) => current ? { ...current, success: true } : current);
+  };
+
   const beginBuild = (building: VillageBuildingSpec) => {
     if (!game) return;
     if (isFeatureBuilding(building)) {
@@ -941,48 +1116,74 @@ export default function App() {
   };
 
   const recruitWorker = () => {
-    if (!game) return;
+    if (!game || !selectedRegion) return;
     if (game.workers >= MAX_WORKERS) {
       setNotice("일꾼은 4명까지 함께할 수 있어요.");
       return;
     }
     const cost = workerRecruitCost(game.workers);
-    if (game.resources.grain < cost) {
-      setNotice("곡식이 부족합니다.");
+    const resource = selectedRegion.resource;
+    if (game.resources[resource] < cost) {
+      setNotice(`${resourceNames[resource]}이 부족합니다.`);
       return;
     }
     setGame({
       ...game,
-      resources: { ...game.resources, grain: game.resources.grain - cost },
+      resources: { ...game.resources, [resource]: game.resources[resource] - cost },
       workers: game.workers + 1,
       development: game.development + 2,
     });
     setNotice("일꾼을 뽑았어요.");
   };
 
+  const unlockProductCatalog = () => {
+    if (!game || !selectedRegion || game.builtStage < 6 || game.productCatalogUnlocked) return;
+    setGame({ ...game, productCatalogUnlocked: true, development: game.development + 6 });
+    setNotice(`${selectedRegion.shortName} 대표 상품 4종이 열렸어요.`);
+  };
+
   const openCraftProduct = () => {
-    if (!selectedRegion) return;
-    setCraftProductId(selectedRegion.product);
+    if (!game || !selectedRegion || !selectedBuilding || isFeatureBuilding(selectedBuilding.spec) || selectedBuilding.spec.stage !== 4) return;
+    if (game.productCraft) {
+      setNotice("이미 상품을 만드는 중이에요.");
+      return;
+    }
+    setCraftProductId(unlockedProductChoices(game, selectedRegion.id)[0]);
+    setCraftAmount(1);
     setModal("craftProduct");
   };
 
-  const craftProduct = (productId: ProductId) => {
-    if (!game || !selectedRegion) return;
+  const craftProduct = (productId: ProductId, amount: number) => {
+    if (!game || !selectedRegion || !selectedBuilding || isFeatureBuilding(selectedBuilding.spec) || selectedBuilding.spec.stage !== 4 || game.productCraft) return;
     const product = productSpecs[productId];
-    const cost = applyCraftDiscount({ ...product.recipe }, game, selectedRegion.id);
+    const unitCost = applyCraftDiscount({ ...product.recipe }, game, selectedRegion.id);
+    const available = maxCraftableAmount(game.resources, unitCost);
+    const craftCount = Math.max(1, Math.min(PRODUCT_CRAFT_MAX_AMOUNT, amount));
+    if (craftCount > available) {
+      setNotice("선택한 수량을 만들 자원이 부족합니다.");
+      return;
+    }
+    const cost = multiplyCost(unitCost, craftCount);
     if (!canPay(game.resources, cost)) {
       setNotice("자원이 부족합니다.");
       return;
     }
     const resources = payCost(game.resources, cost);
-    resources[productId] += 1;
-    setGame(advanceRepeatMission({
+    const startedAt = Date.now();
+    setGame({
       ...game,
       resources,
-      stats: { ...game.stats, crafts: game.stats.crafts + 1 },
-      development: game.development + 4,
-    }, "craft"));
-    setNotice(`${product.name}을 만들었어요.`);
+      productCraft: {
+        buildingId: selectedBuilding.id,
+        productId,
+        amount: craftCount,
+        startedAt,
+        completesAt: startedAt + PRODUCT_CRAFT_DURATION_MS,
+      },
+    });
+    setSelectedBuildingId(null);
+    setModal(null);
+    setNotice(`${product.name} ${craftCount}개를 만들기 시작했어요.`);
   };
 
   const boostProduction = () => {
@@ -1068,7 +1269,10 @@ export default function App() {
   const openTrade = () => {
     if (!game) return;
     const firstIdleMerchant = game.merchants.find((merchant) => merchant.status === "idle");
-    const firstTargetRegion = regionList.find((region) => region.id !== game.selectedRegion);
+    const missionTarget = getCurrentMission(game)?.target;
+    const firstTargetRegion = missionTarget
+      ? regions[missionTarget]
+      : regionList.find((region) => region.id !== game.selectedRegion);
     setTradeMerchant(firstIdleMerchant?.id ?? null);
     setTradeTarget(firstTargetRegion?.id ?? null);
     setTradeAmount(2);
@@ -1090,8 +1294,11 @@ export default function App() {
   };
 
   const returnHome = () => {
-    if (!game?.selectedRegion) return;
+    if (!game?.selectedRegion || !visitRegion) return;
     const homeRegion = game.selectedRegion;
+    setGame((current) => current && current.builtStage >= 3
+      ? { ...current, neighborVisitCompleted: true }
+      : current);
     setSceneBusy(true);
     transitionTargetRef.current = homeRegion;
     setSelectedBuildingId(null);
@@ -1103,8 +1310,8 @@ export default function App() {
   const openProductTrade = () => {
     if (!game || !selectedRegion) return;
     const firstTargetRegion = regionList.find((region) => region.id !== game.selectedRegion);
-    const firstReceiveProduct = firstTargetRegion?.product ?? null;
-    setSendProductId(selectedRegion.product);
+    const firstReceiveProduct = firstTargetRegion ? unlockedProductChoices(game, firstTargetRegion.id)[0] : null;
+    setSendProductId(unlockedProductChoices(game, selectedRegion.id)[0]);
     setProductTradeTarget(firstTargetRegion?.id ?? null);
     setReceiveProductId(firstReceiveProduct);
     setModal("productTrade");
@@ -1149,11 +1356,23 @@ export default function App() {
         const { building } = completed;
         const remainingConstructions = activeConstructions.filter((item) => item.building.id !== completed.building.id);
         const feature = isFeatureBuilding(building.spec);
+        const completedFirstStage = !feature && building.spec.stage === 1 && current.builtStage < 1;
         const completedFinalBuilding = !feature && building.spec.stage === 6;
         const featureBuildings = feature ? [...current.featureBuildings, building.spec.id] : current.featureBuildings;
-        setNotice(completedFinalBuilding ? "6단계 건물 완성! 히든 퀘스트가 열렸어요." : `${building.spec.name} 완성!`);
+        const resources = { ...current.resources };
+        if (completedFirstStage && current.selectedRegion) {
+          resources[regions[current.selectedRegion].resource] += FIRST_STAGE_REWARD;
+        }
+        setNotice(
+          completedFinalBuilding
+            ? "6단계 건물 완성! 모든 메인 퀘스트를 완료했어요."
+            : completedFirstStage
+              ? `${building.spec.name} 완성! 지역 자원 ${FIRST_STAGE_REWARD}개를 받았어요.`
+              : `${building.spec.name} 완성!`,
+        );
         const nextState: GameState = {
           ...current,
+          resources,
           construction: remainingConstructions[0],
           constructionQueue: remainingConstructions.slice(1),
           autoBonus: feature && building.spec.effectKind === "production" ? current.autoBonus + 1 : current.autoBonus,
@@ -1161,7 +1380,7 @@ export default function App() {
           builtStage: feature ? current.builtStage : Math.max(current.builtStage, building.spec.stage),
           buildings: [...current.buildings, building],
           development: current.development + (feature ? 5 : building.spec.stage * 4),
-          success: false,
+          success: current.success,
         };
         const allFeatureBuildingsComplete = feature && nextState.builtStage >= 6 && featureBuildings.length >= featureBuildingsByRegion[nextState.selectedRegion!].length;
         return allFeatureBuildingsComplete && !nextState.repeatMission
@@ -1211,7 +1430,7 @@ export default function App() {
   if (!game || !selectedRegion) {
     return (
       <main className="game-shell">
-        <PhaserGame regionId="rural" command={command} onEvent={handleSceneEvent} />
+        <PhaserGame regionId="rural" commands={commands} onEvent={handleSceneEvent} />
         <StartScreen onSelect={startGame} />
       </main>
     );
@@ -1222,24 +1441,30 @@ export default function App() {
   const otherRegions = regionList.filter((region) => region.id !== game.selectedRegion);
   const tradeLimit = maxTradeAmount(game, selectedRegion.id);
   const canSendTrade = Boolean(activeTradeMerchant && tradeTarget && tradeLimit >= TRADE_MIN_AMOUNT && tradeAmount <= tradeLimit);
-  const craftProductChoices = selectedRegion.products;
-  const sendProductChoices = selectedRegion.products;
-  const targetProductChoices = productTradeTarget ? [regions[productTradeTarget].product] : [];
+  const craftProductChoices = unlockedProductChoices(game, selectedRegion.id);
+  const selectedCraftRecipe = craftProductId
+    ? applyCraftDiscount(productSpecs[craftProductId].recipe, game, selectedRegion.id)
+    : {};
+  const selectedCraftMax = craftProductId ? maxCraftableAmount(game.resources, selectedCraftRecipe) : 0;
+  const selectedCraftCost = multiplyCost(selectedCraftRecipe, craftAmount);
+  const sendProductChoices = unlockedProductChoices(game, selectedRegion.id);
+  const targetProductChoices = productTradeTarget ? unlockedProductChoices(game, productTradeTarget) : [];
   const nextWorkerCost = workerRecruitCost(game.workers);
-  const canRecruitWorker = game.workers < MAX_WORKERS && game.resources.grain >= nextWorkerCost;
+  const nextWorkerResource = selectedRegion.resource;
+  const canRecruitWorker = game.workers < MAX_WORKERS && game.resources[nextWorkerResource] >= nextWorkerCost;
   const unlockedFeatureBuildings =
-    game.builtStage >= 6
+    game.builtStage >= 6 && game.productCatalogUnlocked
       ? featureBuildingsByRegion[selectedRegion.id]
       : [];
   const currentMission = getCurrentMission(game);
-  const pulseBuildButton = currentMission ? ["build-stage-1", "build-stage-2", "build-stage-3", "build-stage-4", "build-stage-5", "final-building", "hidden-feature-building"].includes(currentMission.id) || currentMission.id.startsWith("repeat-") && game.repeatMission?.kind === "craft" : false;
+  const pulseBuildButton = currentMission ? ["build-stage-1", "build-stage-2", "build-stage-3", "build-stage-4", "build-stage-5", "final-building", "hidden-product-catalog", "hidden-feature-building"].includes(currentMission.id) || currentMission.id.startsWith("repeat-") && game.repeatMission?.kind === "craft" : false;
   const hasTravelingMerchant = game.merchants.some((merchant) => merchant.status === "traveling");
-  const pulseTradeButton = (currentMission?.id === "trade-resource" || currentMission?.id.startsWith("repeat-") && game.repeatMission?.kind !== "craft") && !hasTravelingMerchant;
+  const pulseTradeButton = (currentMission?.id.startsWith("trade-resource-") || currentMission?.id.startsWith("repeat-") && game.repeatMission?.kind !== "craft") && !hasTravelingMerchant;
   const actionsLockedUntilFirstWorker = game.workers < 1;
 
   return (
     <main className={modal === "routes" ? "game-shell route-mode" : "game-shell"} style={{ "--hud-height": `${hudHeight}px` } as React.CSSProperties}>
-      <PhaserGame regionId={sceneGame?.selectedRegion ?? game.selectedRegion} initialState={sceneGame} command={command} onEvent={handleSceneEvent} />
+      <PhaserGame regionId={sceneGame?.selectedRegion ?? game.selectedRegion} initialState={sceneGame} commands={commands} onEvent={handleSceneEvent} />
       {assetLoading.active && <LoadingOverlay progress={assetLoading.progress} />}
       <button className="restart-button" onClick={() => setModal("restart")}>다시하기</button>
       {modal !== "routes" && (
@@ -1257,13 +1482,18 @@ export default function App() {
         </>
       )}
 
-      {missionDialog && <MissionDialog dialog={missionDialog} onConfirm={acknowledgeMissionDialog} />}
+      {mainCompletionStep === "celebration"
+        ? <MainCompletionDialog onConfirm={() => setMainCompletionStep("result")} />
+        : mainCompletionStep === "result"
+          ? <Success game={game} onConfirm={acknowledgeMainResult} />
+          : tradeResultDialog
+            ? <TradeResultDialog result={tradeResultDialog} onConfirm={() => setTradeResultDialog(null)} />
+            : missionDialog && <MissionDialog dialog={missionDialog} onConfirm={acknowledgeMissionDialog} />}
 
 
       {visitRegion && !sceneBusy && (
         <div className="visit-banner">
           <strong>{regions[visitRegion].name} 구경 중</strong>
-          <span>{regions[visitRegion].name}도 우리 마을처럼 {game.builtStage}단계까지 발전했어요.</span>
           <button className="small-button" onClick={returnHome}>우리 마을로 돌아가기</button>
         </div>
       )}
@@ -1280,7 +1510,7 @@ export default function App() {
           <span>{selectedRegion.name} · 중심 건물</span>
           <p>일꾼을 뽑고 상인을 보내는 곳</p>
           <button className="small-button" onClick={recruitWorker} disabled={!canRecruitWorker}>
-            {game.workers >= MAX_WORKERS ? "일꾼 가득" : `일꾼 뽑기 · 곡식 ${nextWorkerCost}`}
+            {game.workers >= MAX_WORKERS ? "일꾼 가득" : `일꾼 뽑기 · ${resourceNames[nextWorkerResource]} ${nextWorkerCost}`}
           </button>
         </aside>
       )}
@@ -1317,12 +1547,16 @@ export default function App() {
             <button className="small-button" onClick={openVisit}>이웃 마을 구경하기</button>
           )}
           {!isFeatureBuilding(selectedBuilding.spec) && selectedBuilding.spec.stage === 4 && (
-            <button className="small-button" onClick={openCraftProduct}>상품 만들기</button>
+            <button className="small-button" onClick={openCraftProduct} disabled={Boolean(game.productCraft)}>상품 만들기</button>
           )}
           {!isFeatureBuilding(selectedBuilding.spec) && selectedBuilding.spec.stage === 5 && (
             <button className="small-button" onClick={openProductTrade}>상품 보내기</button>
           )}
-          {!isFeatureBuilding(selectedBuilding.spec) && selectedBuilding.spec.stage === 6 && <button className="small-button">완성 확인</button>}
+          {!isFeatureBuilding(selectedBuilding.spec) && selectedBuilding.spec.stage === 6 && (
+            <button className="small-button" onClick={unlockProductCatalog} disabled={game.productCatalogUnlocked}>
+              {game.productCatalogUnlocked ? "상품 4종 해금" : "대표 상품 발견"}
+            </button>
+          )}
         </aside>
       )}
 
@@ -1336,7 +1570,6 @@ export default function App() {
                   {selectedBuildCosts.map((cost) => (
                     <span className={cost.missing > 0 ? "build-cost missing" : "build-cost ready"} key={cost.id}>
                       {cost.name} {cost.owned}/{cost.needed}
-                      {cost.missing > 0 && <em> -{cost.missing}</em>}
                     </span>
                   ))}
                 </div>
@@ -1407,15 +1640,22 @@ export default function App() {
         <Modal title="교류하기" onClose={() => setModal(null)}>
           <section className="trade-section">
             <strong>상인</strong>
-            <div className="choice-row">
+            <div className="choice-row merchant-choice-row">
               {game.merchants.map((merchant) => (
                 <button
                   key={merchant.id}
-                  className={tradeMerchant === merchant.id ? "choice selected" : "choice"}
+                  className={`choice merchant-choice ${tradeMerchant === merchant.id ? "selected" : ""} ${merchant.status === "traveling" ? "traveling" : ""}`}
                   disabled={merchant.status !== "idle"}
                   onClick={() => setTradeMerchant(merchant.id)}
+                  aria-pressed={tradeMerchant === merchant.id}
                 >
-                  {merchant.name}
+                  <span
+                    className="merchant-portrait"
+                    style={{ backgroundImage: `url(${merchantPortraitAssets[selectedRegion.id]})` }}
+                    aria-hidden="true"
+                  />
+                  <strong>{merchant.name.replace("상인", "상인 ")}</strong>
+                  <small>{merchant.status === "traveling" ? "교류 중" : "대기 중"}</small>
                 </button>
               ))}
               {game.merchants.length === 0 && <span className="empty-text">1단계 건물에서 상인을 뽑으세요.</span>}
@@ -1433,6 +1673,7 @@ export default function App() {
           </section>
           <section className="trade-section">
             <strong>보낼 수량</strong>
+            <p className="trade-limit-note">보내기 최대 20개 · 받기 최대 10개</p>
             <div className="stepper">
               <button onClick={() => setTradeAmount(Math.max(TRADE_MIN_AMOUNT, tradeAmount - TRADE_STEP))}>-</button>
               <span>{resourceNames[selectedRegion.resource]} {tradeAmount}개 → {tradeTarget ? resourceNames[regions[tradeTarget].resource] : "자원"} {tradeAmount / 2}개</span>
@@ -1471,35 +1712,62 @@ export default function App() {
             {craftProductChoices.map((productId) => {
               const product = productSpecs[productId];
               const recipe = applyCraftDiscount(product.recipe, game, selectedRegion.id);
-              const ready = canPay(game.resources, recipe);
+              const craftable = maxCraftableAmount(game.resources, recipe);
+              const ready = craftable > 0;
               return (
                 <button
                   className={craftProductId === productId ? "product-card selected" : "product-card"}
                   key={productId}
-                  onClick={() => setCraftProductId(productId)}
+                  onClick={() => {
+                    setCraftProductId(productId);
+                    setCraftAmount(1);
+                  }}
                   type="button"
                 >
                   <img src={product.asset} alt="" />
                   <strong>{product.name}</strong>
                   <span>보유 {game.resources[productId]}개</span>
+                  <span>제작 가능 {craftable}개</span>
                   <small>{product.use}</small>
                   <em className={ready ? "ready" : "missing"}>{formatCost(recipe)}</em>
                 </button>
               );
             })}
           </div>
+          <section className="trade-section craft-amount-section">
+            <strong>제작 수량</strong>
+            <div className="stepper">
+              <button disabled={craftAmount <= 1} onClick={() => setCraftAmount(Math.max(1, craftAmount - 1))}>-</button>
+              <span>{craftProductId ? productNames[craftProductId] : "상품"} {craftAmount}개 · {formatCost(selectedCraftCost)}</span>
+              <button disabled={craftAmount >= selectedCraftMax || craftAmount >= PRODUCT_CRAFT_MAX_AMOUNT} onClick={() => setCraftAmount(Math.min(selectedCraftMax, PRODUCT_CRAFT_MAX_AMOUNT, craftAmount + 1))}>+</button>
+            </div>
+          </section>
           <button
             className="game-button full"
-            disabled={!craftProductId || !canPay(game.resources, applyCraftDiscount(productSpecs[craftProductId].recipe, game, selectedRegion.id))}
-            onClick={() => craftProductId && craftProduct(craftProductId)}
+            disabled={!craftProductId || selectedCraftMax < 1 || craftAmount > selectedCraftMax || game.productCraft !== undefined}
+            onClick={() => craftProductId && craftProduct(craftProductId, craftAmount)}
           >
-            <PackagePlus size={20} /> {craftProductId ? productNames[craftProductId] : "상품"} 만들기
+            <PackagePlus size={20} /> {craftProductId ? `${productNames[craftProductId]} ${craftAmount}개` : "상품"} 만들기
           </button>
+        </Modal>
+      )}
+
+      {modal === "craftResult" && craftResult && (
+        <Modal title="상품 제작 완료" onClose={() => { setCraftResult(null); setModal(null); }}>
+          <section className="craft-result-card">
+            <img src={productSpecs[craftResult.productId].asset} alt="" />
+            <strong>{productNames[craftResult.productId]} {craftResult.amount}개를 만들었습니다.</strong>
+          </section>
+          <button className="game-button full" onClick={() => { setCraftResult(null); setModal(null); }}>확인</button>
         </Modal>
       )}
 
       {modal === "productTrade" && (
         <Modal title="상품 보내기" onClose={() => setModal(null)}>
+          <section className="trade-section">
+            <strong>교류 효과</strong>
+            <p>상품 교류로 발전도 10을 얻습니다. 발전도 40마다 새 방문객이 찾아오며, 최대 8명이 머물러요.</p>
+          </section>
           <section className="trade-section">
             <strong>보낼 상품</strong>
             <div className="product-grid compact">
@@ -1667,7 +1935,6 @@ function StartScreen({ onSelect }: { onSelect: (regionId: RegionId) => void }) {
             <button key={region.id} className="region-card" style={{ "--point": region.point } as React.CSSProperties} onClick={() => onSelect(region.id)}>
               <strong>{region.name}</strong>
               <span>{region.intro}</span>
-              <small>시작 자원: {resourceNames[region.resource]} 3개</small>
             </button>
           ))}
         </div>
@@ -1731,6 +1998,7 @@ function Hud({ game, productionLeft, onHeightChange }: { game: GameState; produc
         <span>일꾼 {game.workers}명</span>
         <span>상인 {game.merchants.filter((m) => m.status === "idle").length}/{game.merchants.length}명</span>
         <span>발전도 {game.development}</span>
+        <span>방문객 {visitorCountForDevelopment(game.development)}/8</span>
         <span>자동 생산 {productionLeft}초</span>
       </div>
     </section>
@@ -1747,6 +2015,33 @@ function MissionDialog({ dialog, onConfirm }: { dialog: MissionDialogState; onCo
         <span className="mission-badge">{isComplete ? "완료" : dialog.mission.progress}</span>
         <h2 id="mission-dialog-title">{isComplete ? `${dialog.mission.title} 완료!` : dialog.mission.title}</h2>
         {!isComplete && <p>{dialog.mission.detail}</p>}
+        <button className="game-button mission-dialog-confirm" onClick={onConfirm}>확인</button>
+      </section>
+    </div>
+  );
+}
+
+function TradeResultDialog({ result, onConfirm }: { result: TradeResultDialogState; onConfirm: () => void }) {
+  return (
+    <div className="mission-dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="trade-result-dialog-title">
+      <section className="mission-dialog">
+        <span className="eyebrow">교류 완료</span>
+        <span className="mission-badge">성공</span>
+        <h2 id="trade-result-dialog-title">교류 성공!</h2>
+        <p>{regions[result.target].name}과 교류하여<br />{resourceNames[result.resource]} {result.amount}개를 획득했습니다!</p>
+        <button className="game-button mission-dialog-confirm" onClick={onConfirm}>확인</button>
+      </section>
+    </div>
+  );
+}
+
+function MainCompletionDialog({ onConfirm }: { onConfirm: () => void }) {
+  return (
+    <div className="mission-dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="main-completion-dialog-title">
+      <section className="mission-dialog">
+        <span className="eyebrow">메인 퀘스트 완료</span>
+        <span className="mission-badge">16/16</span>
+        <h2 id="main-completion-dialog-title">축하합니다.<br />모든 퀘스트를 완료하였습니다.</h2>
         <button className="game-button mission-dialog-confirm" onClick={onConfirm}>확인</button>
       </section>
     </div>
@@ -1960,7 +2255,7 @@ function BuildZoneList({
   );
 }
 
-function Success({ game, onRestart }: { game: GameState; onRestart: () => void }) {
+function Success({ game, onConfirm }: { game: GameState; onConfirm: () => void }) {
   const region = regions[game.selectedRegion!];
   return (
     <div className="modal-backdrop success-backdrop">
@@ -1973,8 +2268,9 @@ function Success({ game, onRestart }: { game: GameState; onRestart: () => void }
           <span>상품 교류 {game.stats.productTrades}회</span>
           <span>제작 {game.stats.crafts}회</span>
           <span>발전도 {game.development}</span>
+          <span>방문객 {visitorCountForDevelopment(game.development)}/8</span>
         </div>
-        <button className="game-button full" onClick={onRestart}>처음으로</button>
+        <button className="game-button full" onClick={onConfirm}>확인</button>
       </section>
     </div>
   );

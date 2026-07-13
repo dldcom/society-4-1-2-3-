@@ -26,6 +26,10 @@ const ANIMAL_RESOURCE_CHANCE = 0.22;
 const ANIMAL_RESOURCE_DISTANCE = 135;
 const PERSON_CLEARANCE = 58;
 const BUILDING_CLEARANCE = 108;
+const WORKSHOP_CORRIDOR_WIDTH = 220;
+const WORKSHOP_CORRIDOR_DEPTH = 240;
+const WORKSHOP_CORRIDOR_OFFSET_Y = 84;
+const WORKSHOP_WAGON_OFFSET_Y = 118;
 const NAV_TILE_SIZE = 48;
 const MAIN_BUILDING: [number, number] = [WORLD_W / 2, WORLD_H / 2];
 const MAIN_FRONT: [number, number] = [WORLD_W / 2, WORLD_H / 2 + 118];
@@ -64,6 +68,13 @@ const buildingTextureKey = (regionId: RegionId, asset: BuildingSpec["asset"]) =>
 const featureBuildingTextureKey = (id: string) => `feature-building-${id}`;
 const mainBuildingTextureKey = (regionId: RegionId) => `building-${regionId}-main`;
 const hammerTextureKey = "tool-hammer";
+const craftToolTextureKey = (regionId: RegionId) => `craft-tool-${regionId}`;
+const craftToolAssets: Record<RegionId, string> = {
+  rural: "/assets/tools/sickle.png",
+  mountain: "/assets/tools/hand-saw.png",
+  mine: "/assets/tools/hammer.png",
+  coast: "/assets/tools/rope.png",
+};
 const visitorTextureKey = (id: string) => `visitor-${id}`;
 const characterTextureKey = (regionId: RegionId, kind: CharacterSpriteKind) => `character-${regionId}-${kind}`;
 const animalTextureKey = (regionId: RegionId) => `animal-${regionId}`;
@@ -120,26 +131,98 @@ const animalScales: Record<RegionId, number> = {
 const animalDirectionalScale = (regionId: RegionId, direction: Direction) =>
   regionId === "rural" && (direction === "up" || direction === "down") ? animalScales[regionId] * 0.88 : animalScales[regionId];
 
-const ruralTestVisitors = [
+const VISITOR_DEVELOPMENT_THRESHOLDS = Array.from({ length: 8 }, (_, index) => (index + 1) * 40);
+
+const developmentVisitorTypes = [
   {
     id: "mountain-merchant",
     asset: "/assets/visitors/mountain-merchant-walk-4x4.png",
-    spawn: [900, 700] as [number, number],
-    route: [[900, 700], [1030, 700], [1030, 810], [900, 810]] as Array<[number, number]>,
+    lines: ["우리 지역에는 높은 산과 울창한 숲이 많아요.", "이 마을에는 무엇이 유명한가요?"],
   },
   {
     id: "mountain-artisan",
     asset: "/assets/visitors/mountain-artisan-walk-4x4.png",
-    spawn: [1460, 690] as [number, number],
-    route: [[1460, 690], [1330, 690], [1330, 800], [1460, 800]] as Array<[number, number]>,
+    lines: ["우리 지역에서는 나무를 여러 가지로 활용해요.", "튼튼한 도구는 여러 일에 필요해요."],
   },
   {
     id: "mountain-traveler",
     asset: "/assets/visitors/mountain-traveler-walk-4x4.png",
-    spawn: [1180, 980] as [number, number],
-    route: [[1180, 980], [1280, 980], [1280, 1080], [1180, 1080]] as Array<[number, number]>,
+    lines: ["우리 지역에서는 높은 곳의 풍경을 볼 수 있어요.", "이곳의 자연환경은 우리 지역과 어떻게 다를까요?"],
+  },
+  {
+    id: "rural-produce-merchant",
+    asset: "/assets/visitors/rural-produce-merchant-walk-4x4.png",
+    lines: ["우리 지역에는 넓은 논과 밭이 있어요.", "이 마을에서는 무엇을 많이 생산하나요?"],
+  },
+  {
+    id: "rural-mill-technician",
+    asset: "/assets/visitors/rural-mill-technician-walk-4x4.png",
+    lines: ["우리 지역에서는 곡식을 여러 방법으로 가공해요.", "기계의 톱니가 움직이는 모습은 신기해요."],
+  },
+  {
+    id: "rural-orchard-traveler",
+    asset: "/assets/visitors/rural-orchard-traveler-walk-4x4.png",
+    lines: ["우리 지역에는 과수원 나무가 잘 자라고 있어요.", "이곳은 계절에 따라 어떤 모습으로 바뀌나요?"],
+  },
+  {
+    id: "coast-fish-merchant",
+    asset: "/assets/visitors/coast-fish-merchant-walk-4x4.png",
+    lines: ["우리 지역에서는 바다에서 다양한 것을 얻을 수 있어요.", "이 마을 사람들은 주로 어떤 일을 하나요?"],
+  },
+  {
+    id: "coast-net-technician",
+    asset: "/assets/visitors/coast-net-technician-walk-4x4.png",
+    lines: ["우리 지역에서는 그물을 꼼꼼하게 손질해요.", "튼튼한 도구가 있으면 일을 하기 편리해요."],
+  },
+  {
+    id: "coast-sailor-traveler",
+    asset: "/assets/visitors/coast-sailor-traveler-walk-4x4.png",
+    lines: ["우리 지역에서는 배를 타고 이동하기도 해요.", "이 마을에는 어떤 특별한 장소가 있나요?"],
+  },
+  {
+    id: "mine-mineral-merchant",
+    asset: "/assets/visitors/mine-mineral-merchant-walk-4x4.png",
+    lines: ["우리 지역의 땅속에는 다양한 광물이 있어요.", "이 마을의 대표상품은 무엇인가요?"],
+  },
+  {
+    id: "mine-blacksmith",
+    asset: "/assets/visitors/mine-blacksmith-walk-4x4.png",
+    lines: ["우리 지역에서는 광물로 여러 도구를 만들어요.", "재료에 따라 도구의 특징도 달라져요."],
+  },
+  {
+    id: "mine-surveyor-traveler",
+    asset: "/assets/visitors/mine-surveyor-traveler-walk-4x4.png",
+    lines: ["우리 지역에는 땅속 자원을 찾는 사람들이 많아요.", "지도에서 이 마을은 어디에 있을까요?"],
   },
 ];
+
+const commonVisitorLines = [
+  "우리 지역과 다른 점을 찾아보고 있어요.",
+  "지역마다 자연환경이 다르네요.",
+  "이 마을의 특별한 점은 무엇인가요?",
+  "사람들은 이곳에서 어떻게 생활하나요?",
+  "이곳에서는 어떤 자원을 얻을 수 있나요?",
+  "다른 지역을 구경하는 건 재미있어요.",
+  "지역마다 하는 일이 조금씩 다르네요.",
+  "마을을 천천히 둘러보고 싶어요.",
+];
+
+const visitorPatrols: Array<{ spawn: [number, number]; route: Array<[number, number]> }> = [
+  { spawn: [900, 700], route: [[900, 700], [1030, 700], [1030, 810], [900, 810]] },
+  { spawn: [1460, 690], route: [[1460, 690], [1330, 690], [1330, 800], [1460, 800]] },
+  { spawn: [1180, 980], route: [[1180, 980], [1280, 980], [1280, 1080], [1180, 1080]] },
+  { spawn: [760, 850], route: [[760, 850], [870, 850], [870, 950], [760, 950]] },
+  { spawn: [1510, 900], route: [[1510, 900], [1390, 900], [1390, 1010], [1510, 1010]] },
+  { spawn: [1100, 620], route: [[1100, 620], [1220, 620], [1220, 720], [1100, 720]] },
+  { spawn: [1340, 1060], route: [[1340, 1060], [1450, 1060], [1450, 1160], [1340, 1160]] },
+  { spawn: [820, 1060], route: [[820, 1060], [930, 1060], [930, 1160], [820, 1160]] },
+];
+
+type DevelopmentVisitor = (typeof visitorPatrols)[number] & {
+  id: string;
+  typeId: string;
+  asset: string;
+};
 
 export class VillageScene extends Phaser.Scene {
   private emitToReact: EmitEvent;
@@ -150,6 +233,7 @@ export class VillageScene extends Phaser.Scene {
   private buildings = new Map<string, Phaser.GameObjects.Image>();
   private labels = new Map<string, Phaser.GameObjects.Container>();
   private constructionObjects = new Map<string, { sprite: Phaser.GameObjects.Image; label: Phaser.GameObjects.Container; hammer: Phaser.GameObjects.Image }>();
+  private productCraftObjects?: { buildingId: string; icon: Phaser.GameObjects.Image; label: Phaser.GameObjects.Container };
   private missionHalo?: Phaser.GameObjects.Ellipse;
   private missionBubble?: Phaser.GameObjects.Container;
   private missionTargetId?: string;
@@ -158,10 +242,16 @@ export class VillageScene extends Phaser.Scene {
   private shownRegion?: RegionId;
   private merchants = new Map<string, Phaser.GameObjects.Sprite>();
   private visitors = new Map<string, Phaser.GameObjects.Sprite>();
+  private developmentVisitors: DevelopmentVisitor[];
+  private visitorSpeechTimer?: Phaser.Time.TimerEvent;
+  private visitorSpeechHideTimer?: Phaser.Time.TimerEvent;
+  private visitorSpeech?: { sprite: Phaser.GameObjects.Sprite; container: Phaser.GameObjects.Container; width: number; height: number };
+  private lastVisitorSpeechLine?: string;
   private animals: Phaser.GameObjects.Sprite[] = [];
   private visitBustleTimer?: Phaser.Time.TimerEvent;
   private placement?: VillageBuildingSpec;
   private preview?: Phaser.GameObjects.Image;
+  private placementCorridor?: Phaser.GameObjects.Rectangle;
   private initialRegion: RegionId;
   private tuning: RouteTuning = { workerSpots: {}, merchantRoutes: {}, workerSpawns: {}, merchantDestinations: {}, blockedTiles: {}, buildZones: {} };
   private editMode?: {
@@ -190,6 +280,16 @@ export class VillageScene extends Phaser.Scene {
     this.initialRegion = initialRegion;
     this.emitToReact = emitToReact;
     this.state = initialState;
+    const shuffledTypes = Phaser.Utils.Array.Shuffle([...developmentVisitorTypes]);
+    this.developmentVisitors = visitorPatrols.map((patrol, index) => {
+      const type = shuffledTypes[index];
+      return {
+        ...patrol,
+        id: `development-visitor-${index + 1}`,
+        typeId: type.id,
+        asset: type.asset,
+      };
+    });
   }
 
   preload() {
@@ -199,6 +299,9 @@ export class VillageScene extends Phaser.Scene {
     });
     this.queueRegionAssets(this.initialRegion);
     this.load.image(hammerTextureKey, "/assets/tools/hammer.png");
+    (Object.keys(craftToolAssets) as RegionId[]).forEach((regionId) => {
+      this.load.image(craftToolTextureKey(regionId), craftToolAssets[regionId]);
+    });
   }
 
   private beginAssetLoad() {
@@ -255,8 +358,8 @@ export class VillageScene extends Phaser.Scene {
     const hasCompanion = Boolean(state?.companions?.[regionId] || (regionId === "rural" && state?.hasDog));
     const animalKey = animalTextureKey(regionId);
     if ((!state || hasCompanion) && !this.textures.exists(animalKey)) this.load.spritesheet(animalKey, animalSpriteSheets[regionId], { frameWidth: 64, frameHeight: 64 });
-    if (regionId === "rural" && (!state || !state.isVisit)) {
-      ruralTestVisitors.forEach((visitor) => {
+    if (!state || !state.isVisit) {
+      developmentVisitorTypes.forEach((visitor) => {
         const key = visitorTextureKey(visitor.id);
         if (!this.textures.exists(key)) this.load.spritesheet(key, visitor.asset, { frameWidth: 64, frameHeight: 64 });
       });
@@ -299,7 +402,8 @@ export class VillageScene extends Phaser.Scene {
     const needsWagon = Boolean(this.state.isVisit) && !this.textures.exists(characterTextureKey(regionId, "productWagon"));
     const needsAnimal = (this.state.companionCounts?.[regionId] ?? (this.hasRegionCompanion(regionId) ? 1 : 0)) > 0
       && !this.textures.exists(animalTextureKey(regionId));
-    const needsVisitors = regionId === "rural" && !this.state.isVisit && ruralTestVisitors.some((visitor) => !this.textures.exists(visitorTextureKey(visitor.id)));
+    const needsVisitors = !this.state.isVisit
+      && developmentVisitorTypes.some((visitor) => !this.textures.exists(visitorTextureKey(visitor.id)));
     if (!needsWorkers && !needsMerchants && !needsWagon && !needsAnimal && !needsVisitors) return;
     this.loadingCharacterRegions.add(regionId);
     this.queueCharacterAssets(regionId);
@@ -366,6 +470,20 @@ export class VillageScene extends Phaser.Scene {
     });
     if (this.state) this.renderState();
     this.finishAssetLoad();
+  }
+
+  update() {
+    const speech = this.visitorSpeech;
+    if (!speech) return;
+    if (!this.isSpriteAlive(speech.sprite)) {
+      this.clearVisitorSpeech();
+      return;
+    }
+    const view = this.cameras.main.worldView;
+    const halfWidth = speech.width / 2 + 8;
+    const x = Phaser.Math.Clamp(speech.sprite.x, view.left + halfWidth, view.right - halfWidth);
+    const y = Math.max(view.top + speech.height / 2 + 8, speech.sprite.y - 72);
+    speech.container.setPosition(x, y);
   }
 
   applyCommand(command: SceneCommand) {
@@ -464,6 +582,10 @@ export class VillageScene extends Phaser.Scene {
             this.emitToReact({ type: "notice", message: "구경 중에는 건물을 조작할 수 없어요." });
             return;
           }
+          if (this.state?.productCraft?.buildingId === building.id) {
+            this.emitToReact({ type: "notice", message: "이 건물은 상품을 만드는 중이에요." });
+            return;
+          }
           this.emitToReact({ type: "selectBuilding", buildingId: building.id });
         });
         this.buildings.set(building.id, sprite);
@@ -472,10 +594,17 @@ export class VillageScene extends Phaser.Scene {
       }
       sprite.setTexture(this.textureForBuilding(region.id, building.spec));
       sprite.setPosition(building.x, building.y).setDepth(20 + building.y / 10);
+      if (this.state.productCraft?.buildingId === building.id) {
+        sprite.disableInteractive().setAlpha(0.82);
+      } else {
+        if (!sprite.input?.enabled) sprite.setInteractive({ useHandCursor: true });
+        sprite.setAlpha(1);
+      }
       this.labels.get(building.id)?.setPosition(building.x, building.y + 88);
     });
 
     this.renderConstruction();
+    this.renderProductCrafting();
     this.renderMissionMarker();
     if (this.hasReceivedTuning) {
       this.ensureCharacterAssetsForState(region.id);
@@ -526,6 +655,41 @@ export class VillageScene extends Phaser.Scene {
     return this.add.image(0, 0, hammerTextureKey).setDisplaySize(62, 62);
   }
 
+  private renderProductCrafting() {
+    const job = this.state?.productCraft;
+    const building = job ? this.state?.buildings.find((item) => item.id === job.buildingId) : undefined;
+    if (!job || !building || !this.state?.selectedRegion) {
+      this.productCraftObjects?.icon.destroy();
+      this.productCraftObjects?.label.destroy();
+      this.productCraftObjects = undefined;
+      return;
+    }
+
+    if (!this.productCraftObjects || this.productCraftObjects.buildingId !== job.buildingId) {
+      this.productCraftObjects?.icon.destroy();
+      this.productCraftObjects?.label.destroy();
+      const icon = this.add
+        .image(building.x + 38, building.y - 58, craftToolTextureKey(this.state.selectedRegion))
+        .setDisplaySize(58, 58)
+        .setDepth(95)
+        .setAngle(-18);
+      const label = this.createBuildingLabel("상품 제작 중", false).setDepth(96);
+      this.tweens.add({
+        targets: icon,
+        angle: 18,
+        y: "+=12",
+        duration: 300,
+        ease: "Sine.easeInOut",
+        yoyo: true,
+        repeat: -1,
+      });
+      this.productCraftObjects = { buildingId: job.buildingId, icon, label };
+    }
+
+    this.productCraftObjects.icon.setX(building.x + 38);
+    this.productCraftObjects.label.setPosition(building.x, building.y - 112);
+  }
+
   private renderWorkers() {
     if (!this.state?.selectedRegion) return;
     const regionId = this.currentRegion();
@@ -562,6 +726,13 @@ export class VillageScene extends Phaser.Scene {
       const worker = this.workers.pop();
       if (worker) this.destroySprite(worker);
     }
+    this.workers.forEach((worker, index) => {
+      if (!this.isInsideWorkshopCorridor(worker.x, worker.y, 24)) return;
+      const [x, y] = this.resolveMovementTarget(worker, this.getWorkerSpot(index));
+      this.tweens.killTweensOf(worker);
+      worker.setPosition(x, y).setTexture(characterTextureKey(regionId, "workerHarvest"));
+      this.safelyPlay(worker, workerHarvestAnimationKey(regionId));
+    });
   }
 
   private createBuildingLabel(name: string, isMain: boolean) {
@@ -767,7 +938,7 @@ export class VillageScene extends Phaser.Scene {
     this.createDirectionalAnimation(characterTextureKey(regionId, "merchantCart"), `merchant-cart-${regionId}`);
     this.createDirectionalAnimation(characterTextureKey(regionId, "productWagon"), `product-wagon-${regionId}`);
     this.createDirectionalAnimation(animalTextureKey(regionId), `animal-${regionId}`);
-    if (regionId === "rural") ruralTestVisitors.forEach((visitor) => this.createVisitorDirectionalAnimation(visitorTextureKey(visitor.id), `visitor-${visitor.id}`));
+    developmentVisitorTypes.forEach((visitor) => this.createVisitorDirectionalAnimation(visitorTextureKey(visitor.id), `visitor-${visitor.id}`));
   }
 
   private createDirectionalAnimation(texture: string, prefix: string) {
@@ -935,7 +1106,9 @@ export class VillageScene extends Phaser.Scene {
   private getWorkerSpot(index: number): [number, number] {
     const regionId = this.state?.selectedRegion ?? this.initialRegion;
     const spots = this.tuning.workerSpots[regionId]?.length ? this.tuning.workerSpots[regionId]! : RESOURCE_SPOTS[regionId];
-    return spots[index % spots.length];
+    const availableSpots = spots.filter(([x, y]) => !this.isInsideWorkshopCorridor(x, y, 36));
+    const safeSpots = availableSpots.length ? availableSpots : spots;
+    return safeSpots[index % safeSpots.length];
   }
 
   private getWorkerSpawn(index: number): [number, number] {
@@ -979,6 +1152,8 @@ export class VillageScene extends Phaser.Scene {
       const sprite = this.merchants.get(merchant.id)!;
       if (merchant.status === "traveling" && this.state?.isVisit && !this.tweens.isTweening(sprite) && !sprite.getData("ambient")) {
         this.animateAmbientMerchant(sprite, merchant.target ?? this.state.selectedRegion ?? "rural");
+      } else if (merchant.status === "traveling" && !this.state?.isVisit && !sprite.getData("tradeJourney")) {
+        this.animateMerchant(merchant.id, merchant.target ?? this.state.selectedRegion ?? "rural");
       } else if (merchant.status === "idle" && !this.tweens.isTweening(sprite)) {
         this.safelyPlay(
           sprite.setTexture(characterTextureKey(regionId, "merchantWalk")).setScale(WORKER_SCALE).setAlpha(this.state?.isVisit ? 1 : 0),
@@ -1012,13 +1187,15 @@ export class VillageScene extends Phaser.Scene {
     const regionId = this.currentRegion();
     const hasRequiredVisitorAssets = this.state?.isVisit
       ? this.textures.exists(characterTextureKey(regionId, "merchantWalk"))
-      : ruralTestVisitors.every((visitor) => this.textures.exists(visitorTextureKey(visitor.id)));
+      : developmentVisitorTypes.every((visitor) => this.textures.exists(visitorTextureKey(visitor.id)));
     if (!hasRequiredVisitorAssets) {
+      this.stopVisitorSpeech();
       this.visitors.forEach((visitor) => this.destroySprite(visitor));
       this.visitors.clear();
       return;
     }
     if (this.state?.isVisit) {
+      this.stopVisitorSpeech();
       const ids = Array.from({ length: 3 }, (_, index) => `visit-crowd-${index}`);
       this.visitors.forEach((visitor, id) => {
         if (!ids.includes(id)) {
@@ -1037,28 +1214,35 @@ export class VillageScene extends Phaser.Scene {
       });
       return;
     }
-    const showVisitors = this.state?.selectedRegion === "rural" && !this.state?.isVisit;
+    const showVisitors = Boolean(this.state?.selectedRegion) && !this.state?.isVisit;
     if (!showVisitors) {
+      this.stopVisitorSpeech();
       this.visitors.forEach((visitor) => this.destroySprite(visitor));
       this.visitors.clear();
       return;
     }
-    const ruralVisitorIds = new Set(ruralTestVisitors.map((visitor) => visitor.id));
+    const visitorCount = VISITOR_DEVELOPMENT_THRESHOLDS.filter(
+      (threshold) => (this.state?.development ?? 0) >= threshold,
+    ).length;
+    const activeVisitors = this.developmentVisitors.slice(0, visitorCount);
+    const activeVisitorIds = new Set(activeVisitors.map((visitor) => visitor.id));
     this.visitors.forEach((visitor, id) => {
-      if (!ruralVisitorIds.has(id)) {
+      if (!activeVisitorIds.has(id)) {
         this.destroySprite(visitor);
         this.visitors.delete(id);
       }
     });
-    ruralTestVisitors.forEach((visitor) => {
+    activeVisitors.forEach((visitor) => {
       if (this.visitors.has(visitor.id)) return;
       const sprite = this.add
-        .sprite(visitor.spawn[0], visitor.spawn[1], visitorTextureKey(visitor.id), 0)
+        .sprite(visitor.spawn[0], visitor.spawn[1], visitorTextureKey(visitor.typeId), 0)
         .setScale(WORKER_SCALE)
         .setDepth(20 + visitor.spawn[1] / 10);
+      sprite.setData("visitorTypeId", visitor.typeId);
       this.visitors.set(visitor.id, sprite);
       this.startVisitorPatrol(sprite, visitor);
     });
+    this.scheduleVisitorSpeech();
   }
 
   private createVisitorDirectionalAnimation(texture: string, prefix: string) {
@@ -1075,11 +1259,11 @@ export class VillageScene extends Phaser.Scene {
     });
   }
 
-  private startVisitorPatrol(sprite: Phaser.GameObjects.Sprite, visitor: (typeof ruralTestVisitors)[number], routeIndex = 1) {
-    if (!this.isSpriteAlive(sprite) || this.state?.selectedRegion !== "rural" || this.state.isVisit) return;
+  private startVisitorPatrol(sprite: Phaser.GameObjects.Sprite, visitor: DevelopmentVisitor, routeIndex = 1) {
+    if (!this.isSpriteAlive(sprite) || !this.state?.selectedRegion || this.state.isVisit) return;
     const target = visitor.route[routeIndex % visitor.route.length];
     const from: [number, number] = [sprite.x, sprite.y];
-    this.safelyPlay(sprite, `visitor-${visitor.id}-${this.directionFromDelta(target[0] - from[0], target[1] - from[1])}`);
+    this.safelyPlay(sprite, `visitor-${visitor.typeId}-${this.directionFromDelta(target[0] - from[0], target[1] - from[1])}`);
     this.moveSpriteOrthogonally(sprite, [target], 76, undefined, () => {
       this.time.delayedCall(550, () => this.startVisitorPatrol(sprite, visitor, routeIndex + 1));
     });
@@ -1137,11 +1321,117 @@ export class VillageScene extends Phaser.Scene {
           this.offsetFromBuilding(building.x, building.y, -side * 58, 26),
         ];
       }) ?? [];
-    return [MAIN_FRONT, ...buildingDestinations];
+    return [MAIN_FRONT, ...buildingDestinations].filter(([x, y]) => !this.isInsideWorkshopCorridor(x, y, 30));
+  }
+
+  private scheduleVisitorSpeech() {
+    if (this.visitorSpeechTimer || this.state?.isVisit || this.visitors.size === 0) return;
+    this.visitorSpeechTimer = this.time.delayedCall(Phaser.Math.Between(7000, 12000), () => {
+      this.visitorSpeechTimer = undefined;
+      this.showRandomVisitorSpeech();
+      this.scheduleVisitorSpeech();
+    });
+  }
+
+  private showRandomVisitorSpeech() {
+    if (this.state?.isVisit || this.visitorSpeech) return;
+    const candidates = [...this.visitors.entries()]
+      .filter(([id, sprite]) => id.startsWith("development-visitor-") && this.isSpriteAlive(sprite))
+      .map(([, sprite]) => sprite);
+    if (candidates.length === 0) return;
+    const sprite = Phaser.Utils.Array.GetRandom(candidates);
+    const visitorTypeId = sprite.getData("visitorTypeId") as string | undefined;
+    const visitorType = developmentVisitorTypes.find((visitor) => visitor.id === visitorTypeId);
+    if (!visitorType) return;
+    const linePool = Math.random() < 0.2 ? commonVisitorLines : visitorType.lines;
+    const differentLines = linePool.filter((line) => line !== this.lastVisitorSpeechLine);
+    const line = Phaser.Utils.Array.GetRandom(differentLines.length > 0 ? differentLines : linePool);
+    this.lastVisitorSpeechLine = line;
+    this.createVisitorSpeechBubble(sprite, line);
+  }
+
+  private createVisitorSpeechBubble(sprite: Phaser.GameObjects.Sprite, line: string) {
+    this.clearVisitorSpeech();
+    const label = this.add.text(0, 0, line, {
+      fontFamily: "Arial",
+      fontSize: "20px",
+      color: "#3f2a17",
+      fontStyle: "bold",
+      align: "center",
+      wordWrap: { width: 340, useAdvancedWrap: true },
+    }).setOrigin(0.5);
+    const width = Math.min(372, label.width + 28);
+    const height = label.height + 18;
+    const background = this.add.graphics();
+    background.fillStyle(0xfff7db, 0.97);
+    background.lineStyle(3, 0x6a4524, 0.96);
+    background.fillRoundedRect(-width / 2, -height / 2, width, height, 10);
+    background.strokeRoundedRect(-width / 2, -height / 2, width, height, 10);
+    background.fillTriangle(-8, height / 2 - 1, 8, height / 2 - 1, 0, height / 2 + 11);
+    background.strokeTriangle(-8, height / 2 - 1, 8, height / 2 - 1, 0, height / 2 + 11);
+    const container = this.add.container(sprite.x, sprite.y - 72, [background, label]).setDepth(310);
+    this.visitorSpeech = { sprite, container, width, height: height + 11 };
+    this.visitorSpeechHideTimer = this.time.delayedCall(3000, () => this.clearVisitorSpeech());
+  }
+
+  private clearVisitorSpeech() {
+    this.visitorSpeechHideTimer?.remove(false);
+    this.visitorSpeechHideTimer = undefined;
+    this.visitorSpeech?.container.destroy(true);
+    this.visitorSpeech = undefined;
+  }
+
+  private stopVisitorSpeech() {
+    this.visitorSpeechTimer?.remove(false);
+    this.visitorSpeechTimer = undefined;
+    this.clearVisitorSpeech();
   }
 
   private offsetFromBuilding(x: number, y: number, dx: number, dy: number): [number, number] {
     return [Phaser.Math.Clamp(x + dx, 120, WORLD_W - 120), Phaser.Math.Clamp(y + dy, 120, WORLD_H - 120)];
+  }
+
+  private isWorkshopSpec(spec: VillageBuildingSpec) {
+    return !this.isFeatureBuilding(spec) && spec.stage === 5;
+  }
+
+  private getWorkshopCorridor(x: number, y: number): BuildZoneRect {
+    return {
+      x: x - WORKSHOP_CORRIDOR_WIDTH / 2,
+      y: y + WORKSHOP_CORRIDOR_OFFSET_Y,
+      width: WORKSHOP_CORRIDOR_WIDTH,
+      height: WORKSHOP_CORRIDOR_DEPTH,
+    };
+  }
+
+  private getWorkshopBuildings() {
+    const constructions = [this.state?.construction, ...(this.state?.constructionQueue ?? [])]
+      .filter((construction): construction is NonNullable<GameState["construction"]> => Boolean(construction))
+      .map((construction) => construction.building);
+    return [...(this.state?.buildings ?? []), ...constructions].filter((building) => this.isWorkshopSpec(building.spec));
+  }
+
+  private isInsideWorkshopCorridor(x: number, y: number, padding = 0) {
+    return this.getWorkshopBuildings().some((building) => {
+      const corridor = this.getWorkshopCorridor(building.x, building.y);
+      return x >= corridor.x - padding
+        && x <= corridor.x + corridor.width + padding
+        && y >= corridor.y - padding
+        && y <= corridor.y + corridor.height + padding;
+    });
+  }
+
+  private circleIntersectsRect(x: number, y: number, radius: number, rect: BuildZoneRect) {
+    const closestX = Phaser.Math.Clamp(x, rect.x, rect.x + rect.width);
+    const closestY = Phaser.Math.Clamp(y, rect.y, rect.y + rect.height);
+    return Phaser.Math.Distance.Between(x, y, closestX, closestY) < radius;
+  }
+
+  private getWorkshopWagonStart(): [number, number] {
+    const workshop = this.getWorkshopBuildings()[0];
+    return workshop
+      ? this.offsetFromBuilding(workshop.x, workshop.y, 0, WORKSHOP_WAGON_OFFSET_Y)
+      : MAIN_FRONT;
   }
 
   private pickCompanionDestination(sprite: Phaser.GameObjects.Sprite): [number, number] {
@@ -1215,12 +1505,25 @@ export class VillageScene extends Phaser.Scene {
       .setDisplaySize(168, 168)
       .setAlpha(0.65)
       .setDepth(200);
+    this.placementCorridor?.destroy();
+    this.placementCorridor = this.isWorkshopSpec(building)
+      ? this.add.rectangle(
+          WORLD_W / 2,
+          WORLD_H / 2 + WORKSHOP_CORRIDOR_OFFSET_Y + WORKSHOP_CORRIDOR_DEPTH / 2,
+          WORKSHOP_CORRIDOR_WIDTH,
+          WORKSHOP_CORRIDOR_DEPTH,
+          0x88ff88,
+          0.18,
+        ).setStrokeStyle(3, 0x88ff88, 0.8).setDepth(199)
+      : undefined;
   }
 
   private cancelPlacement() {
     this.placement = undefined;
     this.preview?.destroy();
     this.preview = undefined;
+    this.placementCorridor?.destroy();
+    this.placementCorridor = undefined;
   }
 
   private handlePointerMove(pointer: Phaser.Input.Pointer) {
@@ -1233,8 +1536,13 @@ export class VillageScene extends Phaser.Scene {
     }
     if (this.placement && this.preview) {
       const world = pointer.positionToCamera(this.cameras.main) as Phaser.Math.Vector2;
+      const canPlace = this.canPlaceAt(world.x, world.y);
       this.preview.setPosition(world.x, world.y);
-      this.preview.setTint(this.canPlaceAt(world.x, world.y) ? 0x88ff88 : 0xff7777);
+      this.preview.setTint(canPlace ? 0x88ff88 : 0xff7777);
+      this.placementCorridor
+        ?.setPosition(world.x, world.y + WORKSHOP_CORRIDOR_OFFSET_Y + WORKSHOP_CORRIDOR_DEPTH / 2)
+        .setFillStyle(canPlace ? 0x88ff88 : 0xff7777, 0.18)
+        .setStrokeStyle(3, canPlace ? 0x88ff88 : 0xff7777, 0.8);
       return;
     }
     if (this.mapView === "play" && pointer.isDown && this.pointerMoved && this.lastPointer) {
@@ -1308,8 +1616,30 @@ export class VillageScene extends Phaser.Scene {
     } else if (x < 150 || y < 130 || x > WORLD_W - 150 || y > WORLD_H - 130) {
       return false;
     }
-    return this.state.buildings.every((building) => Phaser.Math.Distance.Between(x, y, building.x, building.y) >= MIN_BUILDING_DISTANCE)
-      && this.getPeople().every((person) => Phaser.Math.Distance.Between(x, y, person.x, person.y) >= BUILDING_CLEARANCE);
+    const constructions = [this.state.construction, ...(this.state.constructionQueue ?? [])]
+      .filter((construction): construction is NonNullable<GameState["construction"]> => Boolean(construction))
+      .map((construction) => construction.building);
+    const buildings = [...this.state.buildings, ...constructions];
+    const clearsBuildings = buildings.every((building) => Phaser.Math.Distance.Between(x, y, building.x, building.y) >= MIN_BUILDING_DISTANCE);
+    const clearsPeople = this.getPeople().every((person) => Phaser.Math.Distance.Between(x, y, person.x, person.y) >= BUILDING_CLEARANCE);
+    const clearsWorkshopCorridors = !this.isInsideWorkshopCorridor(x, y, 84);
+    if (!clearsBuildings || !clearsPeople || !clearsWorkshopCorridors) return false;
+
+    if (!this.placement || !this.isWorkshopSpec(this.placement)) return true;
+    const corridor = this.getWorkshopCorridor(x, y);
+    const corridorCorners: Array<[number, number]> = [
+      [corridor.x, corridor.y],
+      [corridor.x + corridor.width, corridor.y],
+      [corridor.x, corridor.y + corridor.height],
+      [corridor.x + corridor.width, corridor.y + corridor.height],
+    ];
+    if (!corridorCorners.every(([cornerX, cornerY]) => this.isInBuildZone(cornerX, cornerY))) return false;
+
+    const obstacles = [
+      { x: MAIN_BUILDING[0], y: MAIN_BUILDING[1], radius: 118 },
+      ...buildings.map((building) => ({ x: building.x, y: building.y, radius: 84 })),
+    ];
+    return obstacles.every((obstacle) => !this.circleIntersectsRect(obstacle.x, obstacle.y, obstacle.radius, corridor));
   }
 
   private normalizeRect(rect: BuildZoneRect): BuildZoneRect {
@@ -1414,11 +1744,13 @@ export class VillageScene extends Phaser.Scene {
 
   private animateMerchant(merchantId: string, target: RegionId) {
     const sprite = this.merchants.get(merchantId);
-    if (!sprite) return;
+    if (!sprite || sprite.getData("tradeJourney")) return;
+    sprite.setData("tradeJourney", true);
     const regionId = this.currentRegion();
     const destination = this.getMerchantDestination(target);
     const route = this.findNavigationPath(MAIN_FRONT, destination);
     if (!route) {
+      sprite.setData("tradeJourney", false);
       this.emitToReact({ type: "notice", message: "상인이 갈 수 있는 길이 없습니다." });
       return;
     }
@@ -1446,6 +1778,7 @@ export class VillageScene extends Phaser.Scene {
               this.safelyPlay(sprite, characterAnimationKey(regionId, "merchant-cart", direction));
             },
             () => {
+              sprite.setData("tradeJourney", false);
               sprite.setTexture(characterTextureKey(regionId, "merchantWalk")).setScale(WORKER_SCALE).setPosition(MAIN_FRONT[0], MAIN_FRONT[1]).setAlpha(0);
               this.safelyPlay(sprite, characterAnimationKey(regionId, "merchant", "down"));
               this.emitToReact({ type: "merchantReturned", merchantId });
@@ -1525,10 +1858,15 @@ export class VillageScene extends Phaser.Scene {
     const regionId = this.currentRegion();
     if (!this.ensureProductWagonAsset(regionId, () => this.animateProductWagon(target, product))) return;
     const destination = this.getMerchantDestination(target);
-    const route = this.findNavigationPath(MAIN_FRONT, destination) ?? (this.state?.isVisit ? this.findVisitTrafficRoute(MAIN_FRONT) : null);
+    let wagonStart = this.getWorkshopWagonStart();
+    let route = this.findNavigationPath(wagonStart, destination) ?? (this.state?.isVisit ? this.findVisitTrafficRoute(wagonStart) : null);
+    if (!route && (wagonStart[0] !== MAIN_FRONT[0] || wagonStart[1] !== MAIN_FRONT[1])) {
+      wagonStart = MAIN_FRONT;
+      route = this.findNavigationPath(wagonStart, destination) ?? (this.state?.isVisit ? this.findVisitTrafficRoute(wagonStart) : null);
+    }
     if (!route) return;
     const outboundTarget = route[route.length - 1] ?? destination;
-    const sprite = this.add.sprite(MAIN_FRONT[0], MAIN_FRONT[1], characterTextureKey(regionId, "productWagon"), 0).setScale(0.94).setDepth(110);
+    const sprite = this.add.sprite(wagonStart[0], wagonStart[1], characterTextureKey(regionId, "productWagon"), 0).setScale(0.94).setDepth(110);
     this.moveSpriteOrthogonally(
       sprite,
       route,
@@ -1539,7 +1877,7 @@ export class VillageScene extends Phaser.Scene {
         this.time.delayedCall(3800, () => {
           if (!this.isSpriteAlive(sprite)) return;
           sprite.setAlpha(1).setPosition(outboundTarget[0], outboundTarget[1]);
-          const returnRoute = this.findNavigationPath(outboundTarget, MAIN_FRONT) ?? [MAIN_FRONT];
+          const returnRoute = this.findNavigationPath(outboundTarget, wagonStart) ?? [wagonStart];
           this.moveSpriteOrthogonally(
             sprite,
             returnRoute,

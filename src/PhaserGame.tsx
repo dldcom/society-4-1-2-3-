@@ -2,20 +2,21 @@ import { useEffect, useRef } from "react";
 import Phaser from "phaser";
 import { VillageScene } from "./GameScene";
 import type { RegionId } from "./gameData";
-import type { GameState, SceneCommand, SceneEvent } from "./types";
+import type { GameState, QueuedSceneCommand, SceneCommand, SceneEvent } from "./types";
 
 type Props = {
   regionId: RegionId;
-  command?: SceneCommand;
+  commands: QueuedSceneCommand[];
   initialState?: GameState;
   onEvent: (event: SceneEvent) => void;
 };
 
-export default function PhaserGame({ regionId, command, initialState, onEvent }: Props) {
+export default function PhaserGame({ regionId, commands, initialState, onEvent }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
   const sceneRef = useRef<VillageScene | null>(null);
   const pendingCommandsRef = useRef<SceneCommand[]>([]);
+  const lastSeenCommandIdRef = useRef(0);
 
   useEffect(() => {
     if (!hostRef.current || gameRef.current) return;
@@ -52,13 +53,17 @@ export default function PhaserGame({ regionId, command, initialState, onEvent }:
   }, [onEvent]);
 
   useEffect(() => {
-    if (!command) return;
-    if (sceneRef.current?.scene.isActive()) {
-      sceneRef.current.applyCommand(command);
-    } else {
-      pendingCommandsRef.current.push(command);
-    }
-  }, [command]);
+    const newCommands = commands.filter(({ id }) => id > lastSeenCommandIdRef.current);
+    newCommands.forEach(({ command }) => {
+      if (sceneRef.current?.scene.isActive()) {
+        sceneRef.current.applyCommand(command);
+      } else {
+        pendingCommandsRef.current.push(command);
+      }
+    });
+    const lastCommand = newCommands[newCommands.length - 1];
+    if (lastCommand) lastSeenCommandIdRef.current = lastCommand.id;
+  }, [commands]);
 
   return <div ref={hostRef} className="phaser-host" />;
 }
