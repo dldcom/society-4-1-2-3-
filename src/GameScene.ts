@@ -31,8 +31,8 @@ const ANIMAL_RESOURCE_CHANCE = 0.22;
 const ANIMAL_RESOURCE_DISTANCE = 135;
 const PERSON_CLEARANCE = 58;
 const BUILDING_CLEARANCE = 108;
-const WORKSHOP_CORRIDOR_WIDTH = 220;
-const WORKSHOP_CORRIDOR_DEPTH = 240;
+const WORKSHOP_CORRIDOR_WIDTH = 170;
+const WORKSHOP_CORRIDOR_DEPTH = 130;
 const WORKSHOP_CORRIDOR_OFFSET_Y = 84;
 const WORKSHOP_WAGON_OFFSET_Y = 118;
 const NAV_TILE_SIZE = 48;
@@ -255,6 +255,7 @@ export class VillageScene extends Phaser.Scene {
   private animals: Phaser.GameObjects.Sprite[] = [];
   private visitBustleTimer?: Phaser.Time.TimerEvent;
   private placement?: VillageBuildingSpec;
+  private movingBuildingId?: string;
   private preview?: Phaser.GameObjects.Image;
   private placementCorridor?: Phaser.GameObjects.Rectangle;
   private initialRegion: RegionId;
@@ -531,6 +532,11 @@ export class VillageScene extends Phaser.Scene {
       this.startPlacement(command.building);
       return;
     }
+    if (command.type === "startMoveBuilding") {
+      const building = this.state?.buildings.find((item) => item.id === command.buildingId);
+      if (building) this.startPlacement(building.spec, building.id, building.x, building.y);
+      return;
+    }
     if (command.type === "cancelPlacement") {
       this.cancelPlacement();
       return;
@@ -582,7 +588,7 @@ export class VillageScene extends Phaser.Scene {
           .setInteractive({ useHandCursor: true })
           .setDepth(20 + building.y / 10);
         sprite.on("pointerup", (_pointer: Phaser.Input.Pointer) => {
-          if (this.pointerMoved) return;
+          if (this.pointerMoved || this.placement) return;
           if (this.state?.isVisit) {
             this.emitToReact({ type: "notice", message: "구경 중에는 건물을 조작할 수 없어요." });
             return;
@@ -603,9 +609,11 @@ export class VillageScene extends Phaser.Scene {
         sprite.disableInteractive().setAlpha(0.82);
       } else {
         if (!sprite.input?.enabled) sprite.setInteractive({ useHandCursor: true });
-        sprite.setAlpha(1);
+        sprite.setAlpha(this.movingBuildingId === building.id ? 0.22 : 1);
       }
-      this.labels.get(building.id)?.setPosition(building.x, building.y + 88);
+      this.labels.get(building.id)
+        ?.setPosition(building.x, building.y + 88)
+        .setAlpha(this.movingBuildingId === building.id ? 0.22 : 1);
     });
 
     this.renderConstruction();
@@ -1015,6 +1023,14 @@ export class VillageScene extends Phaser.Scene {
     ].filter((sprite) => sprite !== exclude && this.isSpriteAlive(sprite) && sprite.alpha > 0.05);
   }
 
+  private getPlacementBlockers() {
+    return [
+      ...this.workers,
+      ...this.merchants.values(),
+      ...this.animals,
+    ].filter((sprite) => this.isSpriteAlive(sprite) && sprite.alpha > 0.05);
+  }
+
   private resolveMovementTarget(sprite: Phaser.GameObjects.Sprite, target: [number, number]): [number, number] {
     let x = Phaser.Math.Clamp(target[0], 96, WORLD_W - 96);
     let y = Phaser.Math.Clamp(target[1], 96, WORLD_H - 96);
@@ -1409,15 +1425,17 @@ export class VillageScene extends Phaser.Scene {
     };
   }
 
-  private getWorkshopBuildings() {
+  private getWorkshopBuildings(excludeBuildingId?: string) {
     const constructions = [this.state?.construction, ...(this.state?.constructionQueue ?? [])]
       .filter((construction): construction is NonNullable<GameState["construction"]> => Boolean(construction))
       .map((construction) => construction.building);
-    return [...(this.state?.buildings ?? []), ...constructions].filter((building) => this.isWorkshopSpec(building.spec));
+    return [...(this.state?.buildings ?? []), ...constructions].filter(
+      (building) => building.id !== excludeBuildingId && this.isWorkshopSpec(building.spec),
+    );
   }
 
-  private isInsideWorkshopCorridor(x: number, y: number, padding = 0) {
-    return this.getWorkshopBuildings().some((building) => {
+  private isInsideWorkshopCorridor(x: number, y: number, padding = 0, excludeBuildingId?: string) {
+    return this.getWorkshopBuildings(excludeBuildingId).some((building) => {
       const corridor = this.getWorkshopCorridor(building.x, building.y);
       return x >= corridor.x - padding
         && x <= corridor.x + corridor.width + padding
@@ -1497,38 +1515,47 @@ export class VillageScene extends Phaser.Scene {
     );
   }
 
-  private startPlacement(building: VillageBuildingSpec) {
+  private startPlacement(
+    building: VillageBuildingSpec,
+    movingBuildingId?: string,
+    initialX = WORLD_W / 2,
+    initialY = WORLD_H / 2,
+  ) {
     const regionId = this.state?.selectedRegion ?? this.initialRegion;
-    if (!this.ensureBuildingAsset(regionId, building, () => this.startPlacement(building))) {
+    if (!this.ensureBuildingAsset(regionId, building, () => this.startPlacement(building, movingBuildingId, initialX, initialY))) {
       this.emitToReact({ type: "notice", message: "건물 도면을 불러오는 중입니다." });
       return;
     }
     this.placement = building;
+    this.movingBuildingId = movingBuildingId;
     this.preview?.destroy();
     this.preview = this.add
-      .image(WORLD_W / 2, WORLD_H / 2, this.textureForBuilding(regionId, building))
+      .image(initialX, initialY, this.textureForBuilding(regionId, building))
       .setDisplaySize(168, 168)
       .setAlpha(0.65)
       .setDepth(200);
     this.placementCorridor?.destroy();
     this.placementCorridor = this.isWorkshopSpec(building)
       ? this.add.rectangle(
-          WORLD_W / 2,
-          WORLD_H / 2 + WORKSHOP_CORRIDOR_OFFSET_Y + WORKSHOP_CORRIDOR_DEPTH / 2,
+          initialX,
+          initialY + WORKSHOP_CORRIDOR_OFFSET_Y + WORKSHOP_CORRIDOR_DEPTH / 2,
           WORKSHOP_CORRIDOR_WIDTH,
           WORKSHOP_CORRIDOR_DEPTH,
           0x88ff88,
           0.18,
         ).setStrokeStyle(3, 0x88ff88, 0.8).setDepth(199)
       : undefined;
+    this.renderState();
   }
 
   private cancelPlacement() {
     this.placement = undefined;
+    this.movingBuildingId = undefined;
     this.preview?.destroy();
     this.preview = undefined;
     this.placementCorridor?.destroy();
     this.placementCorridor = undefined;
+    this.renderState();
   }
 
   private handlePointerMove(pointer: Phaser.Input.Pointer) {
@@ -1572,14 +1599,19 @@ export class VillageScene extends Phaser.Scene {
     }
     if (!this.placement) return;
     if (this.canPlaceAt(world.x, world.y)) {
-      this.emitToReact({ type: "placeBuilding", building: this.placement, x: world.x, y: world.y });
-      this.floatText("완성!", world.x, world.y - 80);
+      if (this.movingBuildingId) {
+        this.emitToReact({ type: "moveBuilding", buildingId: this.movingBuildingId, x: world.x, y: world.y });
+        this.floatText("이동 완료!", world.x, world.y - 80);
+      } else {
+        this.emitToReact({ type: "placeBuilding", building: this.placement, x: world.x, y: world.y });
+        this.floatText("완성!", world.x, world.y - 80);
+      }
       this.cancelPlacement();
     } else {
       if (!this.isInBuildZone(world.x, world.y)) {
         this.floatText("건설불가 지역", world.x, world.y - 70);
         this.emitToReact({ type: "notice", message: "건설불가 지역입니다." });
-        this.cancelPlacement();
+        if (!this.movingBuildingId) this.cancelPlacement();
         return;
       }
       this.floatText("배치 불가", world.x, world.y - 70);
@@ -1624,10 +1656,12 @@ export class VillageScene extends Phaser.Scene {
     const constructions = [this.state.construction, ...(this.state.constructionQueue ?? [])]
       .filter((construction): construction is NonNullable<GameState["construction"]> => Boolean(construction))
       .map((construction) => construction.building);
-    const buildings = [...this.state.buildings, ...constructions];
+    const buildings = [...this.state.buildings, ...constructions].filter(
+      (building) => building.id !== this.movingBuildingId,
+    );
     const clearsBuildings = buildings.every((building) => Phaser.Math.Distance.Between(x, y, building.x, building.y) >= MIN_BUILDING_DISTANCE);
-    const clearsPeople = this.getPeople().every((person) => Phaser.Math.Distance.Between(x, y, person.x, person.y) >= BUILDING_CLEARANCE);
-    const clearsWorkshopCorridors = !this.isInsideWorkshopCorridor(x, y, 84);
+    const clearsPeople = this.getPlacementBlockers().every((person) => Phaser.Math.Distance.Between(x, y, person.x, person.y) >= BUILDING_CLEARANCE);
+    const clearsWorkshopCorridors = !this.isInsideWorkshopCorridor(x, y, 84, this.movingBuildingId);
     if (!clearsBuildings || !clearsPeople || !clearsWorkshopCorridors) return false;
 
     if (!this.placement || !this.isWorkshopSpec(this.placement)) return true;

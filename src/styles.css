@@ -698,6 +698,16 @@ h1 {
   top: 8px;
 }
 
+.building-panel .move-building-button {
+  position: absolute;
+  right: 54px;
+  top: 8px;
+  min-height: 40px;
+  padding: 5px 9px;
+  gap: 4px;
+  font-size: 13px;
+}
+
 .building-panel img {
   width: 96px;
   height: 96px;

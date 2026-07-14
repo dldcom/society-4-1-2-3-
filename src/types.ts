@@ -97,6 +97,7 @@ export type SceneCommand =
   | { type: "setEditMode"; mode: "worker" | "merchant" | "workerSpawn" | "merchantDestination" | "blockedPaint" | "blockedErase" | "buildZone" | null; target?: RegionId }
   | { type: "setMapView"; mode: "play" | "overview" }
   | { type: "startPlacement"; building: VillageBuildingSpec }
+  | { type: "startMoveBuilding"; buildingId: string }
   | { type: "cancelPlacement" }
   | { type: "merchantEnter"; merchantId: string; x: number; y: number }
   | { type: "merchantTravel"; merchantId: string; target: RegionId }
@@ -113,6 +114,7 @@ export type SceneEvent =
   | { type: "assetsReady" }
   | { type: "regionShown"; regionId: RegionId }
   | { type: "placeBuilding"; building: VillageBuildingSpec; x: number; y: number }
+  | { type: "moveBuilding"; buildingId: string; x: number; y: number }
   | { type: "selectBuilding"; buildingId: string }
   | { type: "selectMainBuilding" }
   | { type: "merchantReturned"; merchantId: string }
